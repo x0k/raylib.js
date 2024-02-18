@@ -67,9 +67,13 @@
     <select id="raylib-env-select" class="raylib-select" onchange="run()">
         <!-- This is populated by js -->
     </select>
+    <label for="raylib-impl-select">Implementation:</label>
+    <select id="raylib-impl-select" class="raylib-select" onchange="run()">
+        <!-- This is populated by js -->
+    </select>
     <canvas id="game"></canvas>
     <script type="module">
-        import { RaylibJs, RaylibJsWorker, glfwKeyMapping, browserPlatform } from "./raylib.js"
+        import { createRaylib, IMPLS, RaylibJsWorker, glfwKeyMapping, browserPlatform } from "./raylib.js"
 
         function addEventListeners (raylibJs, canvas) {
             const keyDown = (e) => {
@@ -104,14 +108,19 @@
         function makeRunner ({
             exampleSelector,
             envSelector,
+            implSelector,
             worker,
             canvas,
         }) {
             let raylibJs = undefined
             let removeEventListeners = undefined
             const factories = {
-                "main": ({ canvas, platform }) => new RaylibJs(canvas, platform),
-                "worker": ({ worker, canvas, platform }) => new RaylibJsWorker(worker, canvas, platform),
+                "main": createRaylib,
+                "worker": (params) => new RaylibJsWorker(params),
+            }
+            const pathFactories = {
+                [IMPLS.GAME_FRAME]: (example) => `wasm/${example}.wasm`,
+                [IMPLS.BLOCKING]: (example) => `wasm/${example}.native.wasm`, 
             }
             let oldCanvas = canvas
             return () => {
@@ -123,14 +132,16 @@
                 newCanvas.id = oldCanvas.id
                 oldCanvas.replaceWith(newCanvas)
                 oldCanvas = newCanvas
+                const impl = implSelector.value
                 raylibJs = factories[envSelector.value]({
                     canvas: newCanvas,
                     platform: browserPlatform,
                     worker,
+                    impl,
                 })
                 removeEventListeners = addEventListeners(raylibJs, newCanvas)
                 raylibJs.start({
-                    wasmPath: `wasm/${exampleSelector.value}.wasm`,
+                    wasmPath: pathFactories[impl](exampleSelector.value),
                 })
             }
         }
@@ -179,10 +190,21 @@
         for (const env in envs) {
             raylibEnvSelect.innerHTML += `<option value="${env}">${envs[env]}</option>`
         }
+
+        const impls = {
+            [IMPLS.GAME_FRAME]: "game frame",
+            [IMPLS.BLOCKING]: "blocking"
+        }
+        const defaultImpl = IMPLS.BLOCKING
+        const raylibImplSelect = document.getElementById("raylib-impl-select");
+        for (const impl in impls) {
+            raylibImplSelect.innerHTML += `<option value="${impl}">${impls[impl]}</option>`
+        }
         
         const run = makeRunner({
             exampleSelector: raylibExampleSelect,
             envSelector: raylibEnvSelect,
+            implSelector: raylibImplSelect,
             canvas: document.getElementById("game"),
             worker: new Worker("raylib.worker.js", {
                 type: "module",
@@ -200,6 +222,12 @@
                 selector: raylibEnvSelect,
                 defaultValue: defaultEnv,
                 isValid: (value) => value in envs,
+            },
+            {
+                name: "impl",
+                selector: raylibImplSelect,
+                defaultValue: defaultImpl,
+                isValid: (value) => value in impls
             }
         )
         window.run = () => {

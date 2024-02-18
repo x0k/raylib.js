@@ -47,7 +47,7 @@ export const browserPlatform = {
     }
 }
 
-export class RaylibJs {
+class RaylibJsBase {
     // TODO: We stole the font from the website
     // (https://raylib.com/) and it's slightly different than
     // the one that is "baked" into Raylib library itself. To
@@ -67,7 +67,6 @@ export class RaylibJs {
         this.currentPressedKeyState = new Set();
         this.currentMouseWheelMoveState = 0;
         this.currentMousePosition = {x: 0, y: 0};
-        this.frameId = undefined
         this.images = [];
     }
     
@@ -96,13 +95,6 @@ export class RaylibJs {
         this.currentMousePosition = position
     }
 
-    next = (timestamp) => {
-        this.dt = (timestamp - this.previous)/1000.0;
-        this.previous = timestamp;
-        this.entryFunction();
-        this.frameId = requestAnimationFrame(this.next);
-    }
-
     async start({ wasmPath }) {
         if (this.wasm !== undefined) {
             throw new Error("The game is already running. Please stop() it first.");
@@ -111,14 +103,9 @@ export class RaylibJs {
             env: make_environment(this)
         });
         this.wasm.instance.exports.main();
-        this.frameId = requestAnimationFrame((timestamp) => {
-            this.previous = timestamp
-            this.frameId = requestAnimationFrame(this.next)
-        });
     }
     
     stop() {
-        cancelAnimationFrame(this.frameId);
         this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
         this.#reset()
     }
@@ -360,6 +347,57 @@ export class RaylibJs {
     }
 }
 
+class RaylibJs extends RaylibJsBase {
+    constructor(canvas, platform) {
+        super(canvas, platform);
+        this.frameId = undefined
+    }
+
+    next = (timestamp) => {
+        this.dt = (timestamp - this.previous)/1000.0;
+        this.previous = timestamp;
+        this.entryFunction();
+        this.frameId = requestAnimationFrame(this.next);
+    }
+
+    async start(params) {
+        await super.start(params);
+        this.frameId = requestAnimationFrame((timestamp) => {
+            this.previous = timestamp
+            this.frameId= requestAnimationFrame(this.next)
+        });
+    }
+
+    stop() {
+        cancelAnimationFrame(this.frameId);
+        super.stop();
+    }
+}
+
+class BlockingRaylibJs extends RaylibJsBase {
+
+}
+
+export const IMPLS = {
+    GAME_FRAME: "gameFrame",
+    BLOCKING: "blocking",
+}
+
+export function createRaylib({
+    impl,
+    canvas,
+    platform
+}) {
+    switch (impl) {
+    case IMPLS.GAME_FRAME:
+        return new RaylibJs(canvas, platform)
+    case IMPLS.BLOCKING:
+        return new BlockingRaylibJs(canvas, platform)
+    default:
+        throw new Error(`Unknown impl: ${impl}`) 
+    }
+}
+
 const REQUEST_MESSAGE_TYPE = {
     INIT: 0,
     START: 1,
@@ -417,11 +455,15 @@ export function makeMessagesHandler(self) {
         }
     }
     const handlers = new Array(Object.keys(REQUEST_MESSAGE_TYPE).length)
-    handlers[REQUEST_MESSAGE_TYPE.INIT] = ({ canvas }) => {
+    handlers[REQUEST_MESSAGE_TYPE.INIT] = ({ canvas, impl }) => {
         if (raylibJs) {
             raylibJs.stop()
         }
-        raylibJs = new RaylibJs(canvas, platform)
+        raylibJs = createRaylib({
+            impl,
+            canvas,
+            platform,
+        })
     }
     handlers[REQUEST_MESSAGE_TYPE.START] = async ({ params }) => {
         try {
@@ -495,7 +537,7 @@ export class RaylibJsWorker {
         }
     }
 
-    constructor(worker, canvas, platform) {
+    constructor({ worker, canvas, platform, impl }) {
         this.worker = worker
         this.platform = platform
         this.startPromise = undefined
@@ -507,6 +549,7 @@ export class RaylibJsWorker {
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.INIT,
             canvas: offscreen,
+            impl,
         }, [offscreen])
     }
 
