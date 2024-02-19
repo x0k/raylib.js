@@ -376,6 +376,55 @@ class RaylibJs extends RaylibJsBase {
 
 class BlockingRaylibJs extends RaylibJsBase {
 
+    constructor(canvas, platform) {
+        super(canvas, platform);
+        this.windowShouldClose = false
+        this.frameTime = undefined
+    }
+
+    start(params) {
+        this.previous = performance.now()
+        return super.start(params)
+    } 
+
+    stop() {
+        this.windowShouldClose = true
+    }
+
+    InitWindow(width, height, title_ptr) {
+        this.platform.resize(width, height)
+        super.InitWindow(width, height, title_ptr)
+    }
+
+    SetTargetFPS(fps) {
+        super.SetTargetFPS(fps)
+        this.frameTime = 1.0/fps
+    }
+
+    WindowShouldClose() {
+        return this.windowShouldClose
+    }
+
+    CloseWindow() {
+        super.stop()
+        this.windowShouldClose = false
+    }
+
+    // TODO: Pull events from the queue
+    BeginDrawing() {
+        let now
+        // do {
+            now = performance.now()
+            this.dt = (now - this.previous)/1000.0
+        // } while (this.dt < this.frameTime)
+        this.previous = now
+    }
+
+    EndDrawing() {
+        super.EndDrawing()
+        this.platform.render(this.ctx.getImageData(0, 0, this.ctx.canvas.width, this.ctx.canvas.height));
+    }
+
 }
 
 export const IMPLS = {
@@ -413,6 +462,8 @@ const RESPONSE_MESSAGE_TYPE = {
     START_FAIL: 1,
     UPDATE_TITLE: 2,
     TRACE_LOG: 3,
+    RENDER_FRAME: 4,
+    RESIZE_CANVAS: 5,
 }
 
 export function makeMessagesHandler(self) {
@@ -452,6 +503,19 @@ export function makeMessagesHandler(self) {
                     img.error = error
                 })
             return img
+        },
+        render(imageData) {
+            self.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.RENDER_FRAME,
+                imageData
+            })
+        },
+        resize(width, height) {
+            self.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.RESIZE_CANVAS,
+                width,
+                height
+            })
         }
     }
     const handlers = new Array(Object.keys(REQUEST_MESSAGE_TYPE).length)
@@ -507,50 +571,60 @@ export function makeMessagesHandler(self) {
 export class RaylibJsWorker {
 
     handleMessage = (event) => {
-        switch (event.data.type) {
-        case RESPONSE_MESSAGE_TYPE.START_SUCCESS: {
-            if (this.onStartSuccess) {
-                this.onStartSuccess()
-                return
-            }
-        }
-        case RESPONSE_MESSAGE_TYPE.START_FAIL: {
-            if (this.onStartFail) {
-                this.onStartFail(new Error(event.data.reason))
-                return
-            }
-        }
-        case RESPONSE_MESSAGE_TYPE.UPDATE_TITLE: {
-            this.platform.updateTitle(event.data.title)
-            break
-        }
-        case RESPONSE_MESSAGE_TYPE.TRACE_LOG: {
-            this.platform.traceLog(
-                event.data.logLevel,
-                event.data.message,
-                event.data.args,
-            )
-            break
-        }
-        default:
-            console.error("Unhandled worker message", event)
+        if (this.handlers[event.data.type]) {
+            this.handlers[event.data.type](event.data)
+        } else {
+            console.error("Unhandled message", event)
         }
     }
 
     constructor({ worker, canvas, platform, impl }) {
         this.worker = worker
+        this.canvas = canvas
+        this.ctx = undefined
         this.platform = platform
         this.startPromise = undefined
         this.onStartSuccess = undefined
         this.onStartFail = undefined
         this.worker.addEventListener("message", this.handleMessage)
         // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
-        const offscreen = canvas.transferControlToOffscreen()
+        const canvasFactories = {
+            [IMPLS.GAME_FRAME]: () => canvas.transferControlToOffscreen(),
+            [IMPLS.BLOCKING]: () => {
+                this.ctx = canvas.getContext("2d")
+                return new OffscreenCanvas(800, 600)
+            }
+        }
+        const offscreen = canvasFactories[impl]()
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.INIT,
             canvas: offscreen,
             impl,
         }, [offscreen])
+        this.handlers = new Array(Object.keys(RESPONSE_MESSAGE_TYPE).length)
+        this.handlers[RESPONSE_MESSAGE_TYPE.START_SUCCESS] = () => {
+            if (this.onStartSuccess) {
+                this.onStartSuccess()
+            }
+        }
+        this.handlers[RESPONSE_MESSAGE_TYPE.START_FAIL] = ({ reason }) => {
+            if (this.onStartFail) {
+                this.onStartFail(new Error(reason))
+            }
+        }
+        this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_TITLE] = ({ title }) => {
+            this.platform.updateTitle(title)
+        }
+        this.handlers[RESPONSE_MESSAGE_TYPE.TRACE_LOG] = ({ logLevel, message, args }) => {
+            this.platform.traceLog(logLevel, message, args)
+        }
+        this.handlers[RESPONSE_MESSAGE_TYPE.RENDER_FRAME] = ({ imageData }) => {
+            this.ctx.putImageData(imageData, 0, 0)
+        }
+        this.handlers[RESPONSE_MESSAGE_TYPE.RESIZE_CANVAS] = ({ width, height }) => {
+            this.canvas.width = width
+            this.canvas.height = height
+        }
     }
 
     async start(params) {
