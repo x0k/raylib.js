@@ -47,6 +47,202 @@ export const browserPlatform = {
     }
 }
 
+const CTX_ACTION = {
+    CLEAR_RECT: 0,
+    SET_WIDTH: 1,
+    SET_HEIGHT: 2,
+    BEGIN_PATH: 3,
+    ARC: 4,
+    SET_FILL_STYLE: 5,
+    FILL: 6,
+    FILL_RECT: 7,
+    SET_FONT: 8,
+    FILL_TEXT: 9,
+    SET_STROKE_STYLE: 10,
+    SET_LINE_WIDTH: 11,
+    STROKE_RECT: 12,
+    DRAW_IMAGE: 13,
+}
+
+function applyCtxAction(ctx, action) {
+    switch(action.type) {
+    case CTX_ACTION.CLEAR_RECT:
+        ctx.clearRect(action.x, action.y, action.w, action.h)
+        break;
+    case CTX_ACTION.SET_WIDTH:
+        ctx.canvas.width = action.w
+        break;
+    case CTX_ACTION.SET_HEIGHT:
+        ctx.canvas.height = action.h
+        break;
+    case CTX_ACTION.BEGIN_PATH:
+        ctx.beginPath()
+        break;
+    case CTX_ACTION.ARC:
+        ctx.arc(action.x, action.y, action.radius, action.startAngle, action.endAngle, action.antiClockwise)
+        break;
+    case CTX_ACTION.SET_FILL_STYLE:
+        ctx.fillStyle = action.color
+        break;
+    case CTX_ACTION.FILL:
+        ctx.fill()
+        break;
+    case CTX_ACTION.FILL_RECT:
+        ctx.fillRect(action.x, action.y, action.w, action.h)
+        break;
+    case CTX_ACTION.SET_FONT:
+        ctx.font = action.font
+        break;
+    case CTX_ACTION.FILL_TEXT:
+        ctx.fillText(action.text, action.x, action.y)
+        break;
+    case CTX_ACTION.SET_STROKE_STYLE:
+        ctx.strokeStyle = action.color
+        break;
+    case CTX_ACTION.SET_LINE_WIDTH:
+        ctx.lineWidth = action.w
+        break;
+    case CTX_ACTION.STROKE_RECT:
+        ctx.strokeRect(action.x, action.y, action.w, action.h)
+        break;
+    case CTX_ACTION.DRAW_IMAGE:
+        ctx.drawImage(action.img, action.x, action.y, action.w, action.h)
+    }
+}
+
+function makeRemoteContext(send, ctx, initialData) {
+    return {
+        canvas: {
+            get width() {
+                return initialData.width
+            },
+            set width(w) {
+                initialData.width = w
+                send({
+                    type: CTX_ACTION.SET_WIDTH,
+                    w,
+                })
+            },
+            get height() {
+                return initialData.height
+            },
+            set height(h) {
+                initialData.height = h
+                send({
+                    type: CTX_ACTION.SET_HEIGHT,
+                    h,
+                })
+            },
+        },
+        set fillStyle(color) {
+            send({
+                type: CTX_ACTION.SET_FILL_STYLE,
+                color,
+            })
+        },
+        set font(font) {
+            ctx.font = font
+            send({
+                type: CTX_ACTION.SET_FONT,
+                font,
+            })
+        },
+        set strokeStyle(color) {
+            send({
+                type: CTX_ACTION.SET_STROKE_STYLE,
+                color,
+            })
+        },
+        set lineWidth(w) {
+            send({
+                type: CTX_ACTION.SET_LINE_WIDTH,
+                w,
+            })
+        },
+        clearRect(x, y, w, h) {
+            send({
+                type: CTX_ACTION.CLEAR_RECT,
+                x,
+                y,
+                w,
+                h,
+            })
+        },
+        beginPath() {
+            send({ type: CTX_ACTION.BEGIN_PATH })
+        },
+        arc(x, y, radius, startAngle, endAngle, antiClockwise) {
+            send({
+                type: CTX_ACTION.ARC,
+                x,
+                y,
+                radius,
+                startAngle,
+                endAngle,
+                antiClockwise
+            })
+        },
+        fill() {
+            send({ type: CTX_ACTION.FILL })
+        },
+        fillRect(x, y, w, h) {
+            send({
+                type: CTX_ACTION.FILL_RECT,
+                x,
+                y,
+                w,
+                h,
+            })
+        },
+        fillText(text, x, y) {
+            send({
+                type: CTX_ACTION.FILL_TEXT,
+                text,
+                x,
+                y,
+            })
+        },
+        strokeRect(x, y, w, h) {
+            send({
+                type: CTX_ACTION.STROKE_RECT,
+                x,
+                y,
+                w,
+                h,
+            })
+        },
+        measureText(text) {
+            return ctx.measureText(text)
+        },
+        drawImage(img, x, y) {
+            send({
+                type: CTX_ACTION.DRAW_IMAGE,
+                img,
+                x,
+                y,
+            })
+        },
+        getImageData() {
+            return null
+        }
+    }
+}
+
+function makeBatchedRemoteContext(ctx, initialData) {
+    const batch = []
+    const remote = makeRemoteContext(
+        (action) => { batch.push(action) },
+        ctx,
+        initialData
+    )
+    remote.getImageData = () => {
+        const data = batch.slice()
+        batch.length = 0
+        return data
+    }
+    return remote
+}
+
 class RaylibJsBase {
     // TODO: We stole the font from the website
     // (https://raylib.com/) and it's slightly different than
@@ -70,11 +266,8 @@ class RaylibJsBase {
         this.images = [];
     }
     
-    constructor(canvas, platform) {
-        this.ctx = canvas.getContext("2d");
-        if (this.ctx === null) {
-            throw new Error("Could not create 2d canvas context");
-        }
+    constructor(ctx, platform) {
+        this.ctx = ctx
         this.platform = platform
         this.#reset();
     }
@@ -427,23 +620,41 @@ class BlockingRaylibJs extends RaylibJsBase {
 
 }
 
-export const IMPLS = {
+export const IMPL = {
     GAME_FRAME: "gameFrame",
     BLOCKING: "blocking",
+}
+
+export const RENDERING_CTX = {
+    DD: "2d",
+    BATCHED_REMOTE_2D: "batchedRemote2d",
+}
+
+const contextFactories = {
+    [RENDERING_CTX.DD]: (canvas) => canvas.getContext("2d"),
+    [RENDERING_CTX.BATCHED_REMOTE_2D]: (canvas) => makeBatchedRemoteContext(
+        canvas.getContext("2d"),
+        {
+            width: canvas.width,
+            height: canvas.height,
+        }
+    ),
 }
 
 export function createRaylib({
     impl,
     canvas,
-    platform
+    platform,
+    rendering,
 }) {
+    const ctx = contextFactories[rendering](canvas)
     switch (impl) {
-    case IMPLS.GAME_FRAME:
-        return new RaylibJs(canvas, platform)
-    case IMPLS.BLOCKING:
-        return new BlockingRaylibJs(canvas, platform)
+    case IMPL.GAME_FRAME:
+        return new RaylibJs(ctx, platform)
+    case IMPL.BLOCKING:
+        return new BlockingRaylibJs(ctx, platform)
     default:
-        throw new Error(`Unknown impl: ${impl}`) 
+        throw new Error(`Unknown impl: ${impl}`)
     }
 }
 
@@ -462,7 +673,7 @@ const RESPONSE_MESSAGE_TYPE = {
     START_FAIL: 1,
     UPDATE_TITLE: 2,
     TRACE_LOG: 3,
-    RENDER_FRAME: 4,
+    RENDER: 4,
     RESIZE_CANVAS: 5,
 }
 
@@ -504,10 +715,10 @@ export function makeMessagesHandler(self) {
                 })
             return img
         },
-        render(imageData) {
+        render(data) {
             self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.RENDER_FRAME,
-                imageData
+                type: RESPONSE_MESSAGE_TYPE.RENDER,
+                data
             })
         },
         resize(width, height) {
@@ -519,7 +730,7 @@ export function makeMessagesHandler(self) {
         }
     }
     const handlers = new Array(Object.keys(REQUEST_MESSAGE_TYPE).length)
-    handlers[REQUEST_MESSAGE_TYPE.INIT] = ({ canvas, impl }) => {
+    handlers[REQUEST_MESSAGE_TYPE.INIT] = ({ canvas, impl, rendering }) => {
         if (raylibJs) {
             raylibJs.stop()
         }
@@ -527,6 +738,7 @@ export function makeMessagesHandler(self) {
             impl,
             canvas,
             platform,
+            rendering,
         })
     }
     handlers[REQUEST_MESSAGE_TYPE.START] = async ({ params }) => {
@@ -578,7 +790,13 @@ export class RaylibJsWorker {
         }
     }
 
-    constructor({ worker, canvas, platform, impl }) {
+    constructor({
+        worker,
+        canvas,
+        platform,
+        impl,
+        rendering
+    }) {
         this.worker = worker
         this.canvas = canvas
         this.ctx = undefined
@@ -589,8 +807,8 @@ export class RaylibJsWorker {
         this.worker.addEventListener("message", this.handleMessage)
         // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
         const canvasFactories = {
-            [IMPLS.GAME_FRAME]: () => canvas.transferControlToOffscreen(),
-            [IMPLS.BLOCKING]: () => {
+            [IMPL.GAME_FRAME]: () => canvas.transferControlToOffscreen(),
+            [IMPL.BLOCKING]: () => {
                 this.ctx = canvas.getContext("2d")
                 return new OffscreenCanvas(800, 600)
             }
@@ -599,6 +817,7 @@ export class RaylibJsWorker {
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.INIT,
             canvas: offscreen,
+            rendering,
             impl,
         }, [offscreen])
         this.handlers = new Array(Object.keys(RESPONSE_MESSAGE_TYPE).length)
@@ -618,9 +837,17 @@ export class RaylibJsWorker {
         this.handlers[RESPONSE_MESSAGE_TYPE.TRACE_LOG] = ({ logLevel, message, args }) => {
             this.platform.traceLog(logLevel, message, args)
         }
-        this.handlers[RESPONSE_MESSAGE_TYPE.RENDER_FRAME] = ({ imageData }) => {
-            this.ctx.putImageData(imageData, 0, 0)
+        const renderHandlerFactories = {
+            [RENDERING_CTX.DD]: ({ data }) => {
+                this.ctx.putImageData(data, 0, 0)
+            },
+            [RENDERING_CTX.BATCHED_REMOTE_2D]: ({ data }) => {
+                for (let i = 0; i < data.length; i++) {
+                    applyCtxAction(this.ctx, data[i])
+                }
+            }
         }
+        this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = renderHandlerFactories[rendering]
         this.handlers[RESPONSE_MESSAGE_TYPE.RESIZE_CANVAS] = ({ width, height }) => {
             this.canvas.width = width
             this.canvas.height = height
