@@ -111,6 +111,11 @@ function applyCtxAction(ctx, action) {
 }
 
 function makeRemoteContext(send, ctx, initialData) {
+    const len = Object.keys(CTX_ACTION).length
+    const p = Array.from(Array(len), () => [])
+    const idx = Array(len).fill(0)
+    const beginPath = { type: CTX_ACTION.BEGIN_PATH }
+    const fill = { type: CTX_ACTION.FILL }
     return {
         canvas: {
             get width() {
@@ -118,61 +123,78 @@ function makeRemoteContext(send, ctx, initialData) {
             },
             set width(w) {
                 initialData.width = w
-                send({
+                const data = p[CTX_ACTION.SET_WIDTH][idx[CTX_ACTION.SET_WIDTH]++] ??= {
                     type: CTX_ACTION.SET_WIDTH,
                     w,
-                })
+                }
+                data.w = w
+                send(data)
             },
             get height() {
                 return initialData.height
             },
             set height(h) {
                 initialData.height = h
-                send({
+                const data = p[CTX_ACTION.SET_HEIGHT][idx[CTX_ACTION.SET_HEIGHT]++] ??= {
                     type: CTX_ACTION.SET_HEIGHT,
                     h,
-                })
+                }
+                data.h = h
+                send(data)
             },
         },
         set fillStyle(color) {
-            send({
+            const data = p[CTX_ACTION.SET_FILL_STYLE][idx[CTX_ACTION.SET_FILL_STYLE]++] ??= {
                 type: CTX_ACTION.SET_FILL_STYLE,
                 color,
-            })
+            }
+            data.color = color
+            send(data)
         },
         set font(font) {
             ctx.font = font
-            send({
+            const data = p[CTX_ACTION.SET_FONT][idx[CTX_ACTION.SET_FONT]++] ??= {
                 type: CTX_ACTION.SET_FONT,
                 font,
-            })
+            }
+            data.font = font
+            send(data)
         },
         set strokeStyle(color) {
-            send({
+            const data = p[CTX_ACTION.SET_STROKE_STYLE][idx[CTX_ACTION.SET_STROKE_STYLE]++] ??= {
                 type: CTX_ACTION.SET_STROKE_STYLE,
                 color,
-            })
+            }
+            data.color = color
+            send(data)
         },
         set lineWidth(w) {
-            send({
+            const data = p[CTX_ACTION.SET_LINE_WIDTH][idx[CTX_ACTION.SET_LINE_WIDTH]++] ??= {
                 type: CTX_ACTION.SET_LINE_WIDTH,
                 w,
-            })
+            }
+            data.w = w
+            send(data)
         },
         clearRect(x, y, w, h) {
-            send({
+            const data = p[CTX_ACTION.CLEAR_RECT][idx[CTX_ACTION.CLEAR_RECT]++] ??= {
                 type: CTX_ACTION.CLEAR_RECT,
                 x,
                 y,
                 w,
                 h,
-            })
+            }
+            data.x = x
+            data.y = y
+            data.w = w
+            data.h = h
+            send(data)
         },
         beginPath() {
-            send({ type: CTX_ACTION.BEGIN_PATH })
+            send(beginPath)
         },
         arc(x, y, radius, startAngle, endAngle, antiClockwise) {
-            send({
+            const data = p[CTX_ACTION.ARC][idx[CTX_ACTION.ARC]++] ??= {
                 type: CTX_ACTION.ARC,
                 x,
                 y,
@@ -180,50 +202,77 @@ function makeRemoteContext(send, ctx, initialData) {
                 startAngle,
                 endAngle,
                 antiClockwise
-            })
+            }
+            data.x = x
+            data.y = y
+            data.radius = radius
+            data.startAngle = startAngle
+            data.endAngle = endAngle
+            data.antiClockwise = antiClockwise
+            send(data)
         },
         fill() {
-            send({ type: CTX_ACTION.FILL })
+            send(fill)
         },
         fillRect(x, y, w, h) {
-            send({
+            const data = p[CTX_ACTION.FILL_RECT][idx[CTX_ACTION.FILL_RECT]++] ??= {
                 type: CTX_ACTION.FILL_RECT,
                 x,
                 y,
                 w,
                 h,
-            })
+            }
+            data.x = x
+            data.y = y
+            data.w = w
+            data.h = h
+            send(data)
         },
         fillText(text, x, y) {
-            send({
+            const data = p[CTX_ACTION.FILL_TEXT][idx[CTX_ACTION.FILL_TEXT]++] ??= {
                 type: CTX_ACTION.FILL_TEXT,
                 text,
                 x,
                 y,
-            })
+            }
+            data.text = text
+            data.x = x
+            data.y = y
+            send(data)
         },
         strokeRect(x, y, w, h) {
-            send({
+            const data = p[CTX_ACTION.STROKE_RECT][idx[CTX_ACTION.STROKE_RECT]++] ??= {
                 type: CTX_ACTION.STROKE_RECT,
                 x,
                 y,
                 w,
                 h,
-            })
+            }
+            data.x = x
+            data.y = y
+            data.w = w
+            data.h = h
+            send(data)
         },
         measureText(text) {
             return ctx.measureText(text)
         },
         drawImage(img, x, y) {
-            send({
+            const data = p[CTX_ACTION.DRAW_IMAGE][idx[CTX_ACTION.DRAW_IMAGE]++] ??= {
                 type: CTX_ACTION.DRAW_IMAGE,
                 img,
                 x,
                 y,
-            })
+            }
+            data.img = img
+            data.x = x
+            data.y = y
+            send(data)
         },
         getImageData() {
-            return null
+            for (let i = 0; i < len; i++) {
+                idx[i] = 0
+            }
         }
     }
 }
@@ -235,7 +284,9 @@ function makeBatchedRemoteContext(ctx, initialData) {
         ctx,
         initialData
     )
+    const reset = remote.getImageData
     remote.getImageData = () => {
+        reset()
         const data = batch.slice()
         batch.length = 0
         return data
@@ -606,10 +657,10 @@ class BlockingRaylibJs extends RaylibJsBase {
     // TODO: Pull events from the queue
     BeginDrawing() {
         let now
-        // do {
+        do {
             now = performance.now()
             this.dt = (now - this.previous)/1000.0
-        // } while (this.dt < this.frameTime)
+        } while (this.dt < this.frameTime)
         this.previous = now
     }
 
@@ -647,12 +698,15 @@ export function createRaylib({
     platform,
     rendering,
 }) {
-    const ctx = contextFactories[rendering](canvas)
     switch (impl) {
-    case IMPL.GAME_FRAME:
+    case IMPL.GAME_FRAME: {
+        const ctx = canvas.getContext("2d")
         return new RaylibJs(ctx, platform)
-    case IMPL.BLOCKING:
+    }
+    case IMPL.BLOCKING: {
+        const ctx = contextFactories[rendering](canvas)
         return new BlockingRaylibJs(ctx, platform)
+    }
     default:
         throw new Error(`Unknown impl: ${impl}`)
     }
