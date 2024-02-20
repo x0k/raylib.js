@@ -1,4 +1,4 @@
-import { makeMessagesHandler } from './raylib.js'
+import { makeWorkerMessagesHandler } from './raylib_worker.js'
 
 const font = new FontFace(
   "grixel",
@@ -9,4 +9,4 @@ self.fonts.add(font);
 
 font.load().catch(console.error)
 
-onmessage = makeMessagesHandler(self)
+onmessage = makeWorkerMessagesHandler(self)

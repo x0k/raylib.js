@@ -75,16 +75,15 @@
     <select id="raylib-ctx-select" class="raylib-select" onchange="run()">
         <!-- This is populated by js -->
     </select>
+    <label for="raylib-rnd-select">Renderer:</label>
+    <select id="raylib-rnd-select" class="raylib-select" onchange="run()">
+        <!-- This is populated by js -->
+    </select>
     <canvas id="game"></canvas>
     <script type="module">
-        import {
-            createRaylib,
-            IMPL,
-            RENDERING_CTX,
-            RaylibJsWorker,
-            glfwKeyMapping,
-            browserPlatform,
-        } from "./raylib.js"
+        import { RaylibJs, makePlatform, glfwKeyMapping } from "./raylib.js"
+        import { IMPL, RENDERING_CTX } from "./raylib_factory.js"
+        import { RaylibJsWorker, RENDERER } from "./raylib_worker.js"
 
         function addEventListeners (raylibJs, canvas) {
             const keyDown = (e) => {
@@ -121,22 +120,31 @@
             envSelector,
             implSelector,
             ctxSelector,
-            worker,
+            rendererSelector,
             canvas,
+            worker,
+            rendererWorker,
         }) {
             let raylibJs = undefined
             let removeEventListeners = undefined
             const factories = {
-                "main": (params) => createRaylib({
-                    ...params,
-                    impl: IMPL.GAME_FRAME,
-                    rendering: RENDERING_CTX.DD,
-                }),
+                "main": ({ canvas, platform }) => new RaylibJs(
+                    canvas.getContext("2d"),
+                    platform
+                ),
                 "worker": (params) => new RaylibJsWorker(params),
             }
-            const pathFactories = {
-                [IMPL.GAME_FRAME]: (example) => `wasm/${example}.wasm`,
-                [IMPL.BLOCKING]: (example) => `wasm/${example}.native.wasm`, 
+            const pathFactory = (impl, example) => {
+                switch (impl) {
+                case IMPL.GAME_FRAME:
+                    return `wasm/${example}.wasm`
+                case IMPL.BLOCKING:
+                    return `wasm/${example}.native.wasm`
+                }
+            }
+            const envPathFactories = {
+                "main": (_, example) => pathFactory(IMPL.GAME_FRAME, example),
+                "worker": pathFactory
             }
             let oldCanvas = canvas
             return () => {
@@ -149,16 +157,21 @@
                 oldCanvas.replaceWith(newCanvas)
                 oldCanvas = newCanvas
                 const impl = implSelector.value
-                raylibJs = factories[envSelector.value]({
+                const env = envSelector.value
+                raylibJs = factories[env]({
                     canvas: newCanvas,
-                    platform: browserPlatform,
+                    platform: makePlatform({
+                        canvas: newCanvas
+                    }),
                     worker,
                     impl,
                     rendering: ctxSelector.value,
+                    renderer: rendererSelector.value,
+                    rendererWorker,
                 })
                 removeEventListeners = addEventListeners(raylibJs, newCanvas)
                 raylibJs.start({
-                    wasmPath: pathFactories[impl](exampleSelector.value),
+                    wasmPath: envPathFactories[env](impl, exampleSelector.value),
                 })
             }
         }
@@ -220,6 +233,7 @@
 
         const ctxs = {
             [RENDERING_CTX.DD]: "full frame",
+            [RENDERING_CTX.REMOTE_2D]: "action stream",
             [RENDERING_CTX.BATCHED_REMOTE_2D]: "action batches",
         }
         const defaultCtx = RENDERING_CTX.DD
@@ -228,13 +242,27 @@
             raylibCtxSelect.innerHTML += `<option value="${ctx}">${ctxs[ctx]}</option>`
         }
 
+        const renderers = {
+            [RENDERER.MAIN_THREAD]: "main thread",
+            [RENDERER.WORKER_THREAD]: "worker thread",
+        }
+        const defaultRenderer = RENDERER.MAIN_THREAD
+        const raylibRendererSelect = document.getElementById("raylib-rnd-select");
+        for (const renderer in renderers) {
+            raylibRendererSelect.innerHTML += `<option value="${renderer}">${renderers[renderer]}</option>`
+        }
+
         const run = makeRunner({
             exampleSelector: raylibExampleSelect,
             envSelector: raylibEnvSelect,
             implSelector: raylibImplSelect,
             ctxSelector: raylibCtxSelect,
+            rendererSelector: raylibRendererSelect,
             canvas: document.getElementById("game"),
             worker: new Worker("raylib.worker.js", {
+                type: "module",
+            }),
+            rendererWorker: new Worker("renderer.worker.js", {
                 type: "module",
             }),
         })
@@ -262,6 +290,12 @@
                 selector: raylibCtxSelect,
                 defaultValue: defaultCtx,
                 isValid: (value) => value in ctxs
+            },
+            {
+                name: "rnd",
+                selector: raylibRendererSelect,
+                defaultValue: defaultRenderer,
+                isValid: (value) => value in renderers
             }
         )
         window.run = () => {
