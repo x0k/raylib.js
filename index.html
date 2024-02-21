@@ -248,10 +248,8 @@
         }
 
         const ctxs = {
-            [RENDERING_CTX.DD]: "full frame",
-            [RENDERING_CTX.REMOTE_2D]: "action stream",
-            [RENDERING_CTX.BATCHED_REMOTE_2D]: "action batches",
-            [RENDERING_CTX.BITMAP]: "bitmap",
+            [RENDERING_CTX.DD]: "putImageData",
+            [RENDERING_CTX.BITMAP]: "transferFromImageBitmap",
         }
         const defaultCtx = RENDERING_CTX.DD
         const raylibCtxSelect = document.getElementById("raylib-ctx-select");

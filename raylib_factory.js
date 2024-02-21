@@ -1,4 +1,3 @@
-import { makeRemoteContext, makeBatchedRemoteContext } from './remote_context.js'
 import { BlockingRaylibJs, RaylibJs } from './raylib.js'
 
 export const IMPL = {
@@ -8,8 +7,6 @@ export const IMPL = {
 
 export const RENDERING_CTX = {
     DD: "2d",
-    REMOTE_2D: "remote2d",
-    BATCHED_REMOTE_2D: "batchedRemote2d",
     BITMAP: "bitmap",
 }
 
@@ -44,21 +41,6 @@ const remoteContextFactories = {
             }
         })
     },
-    [RENDERING_CTX.REMOTE_2D]: ({ canvas, platform }) => makeRemoteContext(
-        platform.render.bind(platform),
-        canvas.getContext("2d"),
-        {
-            width: canvas.width,
-            height: canvas.height,
-        }
-    ),
-    [RENDERING_CTX.BATCHED_REMOTE_2D]: ({ canvas }) => makeBatchedRemoteContext(
-        canvas.getContext("2d"),
-        {
-            width: canvas.width,
-            height: canvas.height,
-        }
-    ),
     [RENDERING_CTX.BITMAP]: ({ canvas, platform }) => {
         let canvasProxy
         return new Proxy(canvas.getContext('2d'), {

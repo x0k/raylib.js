@@ -1,5 +1,4 @@
 import { SharedQueue } from './shared_queue.js'
-import { applyCtxAction } from './remote_context.js'
 import { EVENT_TYPE } from './raylib.js'
 import { createRaylib, IMPL, RENDERING_CTX } from './raylib_factory.js'
 
@@ -35,23 +34,12 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                 data,
             }, [data.data.buffer])
         },
-        [RENDERING_CTX.REMOTE_2D]: (data) => {
-            data && renderHandler.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.RENDER,
-                data
-            })
-        },
-        [RENDERING_CTX.BATCHED_REMOTE_2D]: (data) => {
-            renderHandler.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.RENDER,
-                data
-            })
-        },
         [RENDERING_CTX.BITMAP]: (data) => {
             renderHandler.postMessage({
                 type: RESPONSE_MESSAGE_TYPE.RENDER,
                 data,
-            })
+            // TODO: Find out why transferring a ImageBitmap leads to memory leaks 
+            }) //, [data])
             data.close()
         },
     }[rendering]
@@ -177,8 +165,6 @@ export function makeWorkerMessagesHandler(self) {
 
 const RENDERING_TO_CONTEXT = {
     [RENDERING_CTX.DD]: "2d",
-    [RENDERING_CTX.REMOTE_2D]: "2d",
-    [RENDERING_CTX.BATCHED_REMOTE_2D]: "2d",
     [RENDERING_CTX.BITMAP]: "bitmaprenderer",
 }
 
@@ -187,14 +173,6 @@ function makeRenderHandlerFactories(canvas, rendering) {
     return {
         [RENDERING_CTX.DD]: ({ data }) => {
             ctx.putImageData(data, 0, 0)
-        },
-        [RENDERING_CTX.REMOTE_2D]: ({ data }) => {
-            applyCtxAction(ctx, data)
-        },
-        [RENDERING_CTX.BATCHED_REMOTE_2D]: ({ data }) => {
-            for (let i = 0; i < data.length; i++) {
-                applyCtxAction(ctx, data[i])
-            }
         },
         [RENDERING_CTX.BITMAP]: ({ data }) => {
             ctx.transferFromImageBitmap(data)
