@@ -15,11 +15,10 @@ const REQUEST_MESSAGE_TYPE = {
 const RESPONSE_MESSAGE_TYPE = {
     START_SUCCESS: 0,
     START_FAIL: 1,
-    UPDATE_TITLE: 2,
+    UPDATE_WINDOW: 2,
     TRACE_LOG: 3,
     RENDER: 4,
-    UPDATE_CANVAS: 5,
-    LOAD_FONT: 6,
+    LOAD_FONT: 5,
 }
 
 function makePlatform({ self, rendering, renderer, rendererPort }) {
@@ -28,13 +27,15 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
         [RENDERER.WORKER_THREAD]: rendererPort,
     }[renderer]
     const render = {
-        [RENDERING_CTX.DD]: (data) => {
+        [RENDERING_CTX.DD]: (ctx) => {
+            const data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height)
             renderHandler.postMessage({
                 type: RESPONSE_MESSAGE_TYPE.RENDER,
                 data,
             }, [data.data.buffer])
         },
-        [RENDERING_CTX.BITMAP]: (data) => {
+        [RENDERING_CTX.BITMAP]: (ctx) => {
+            const data = ctx.canvas.transferToImageBitmap()
             renderHandler.postMessage({
                 type: RESPONSE_MESSAGE_TYPE.RENDER,
                 data,
@@ -44,10 +45,18 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
         },
     }[rendering]
     return {
-        updateTitle(title) {
+        updateWindow(title, width, height) {
             self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.UPDATE_TITLE,
-                title
+                type: RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW,
+                title,
+                width,
+                height,
+            })
+            rendererPort.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW,
+                title,
+                width,
+                height,
             })
         },
         traceLog(logLevel, message, args) {
@@ -85,13 +94,6 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                     img.error = error
                 })
             return img
-        },
-        updateCanvas(property, value) {
-            renderHandler.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS,
-                property,
-                value
-            })
         },
         render,
     }
@@ -193,8 +195,9 @@ export function makeRendererMessagesHandler(self) {
                 case RESPONSE_MESSAGE_TYPE.RENDER:
                     render(event.data)
                     break
-                case RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS:
-                    canvas[event.data.property] = event.data.value
+                case RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW:
+                    canvas.width = event.data.width
+                    canvas.height = event.data.height
                     break
                 case RESPONSE_MESSAGE_TYPE.LOAD_FONT: {
                     new FontFace(
@@ -213,8 +216,10 @@ export function makeRendererMessagesHandler(self) {
             return
         }
         case REQUEST_MESSAGE_TYPE.STOP:
-            port.onmessage = null
-            port = undefined
+            if (port) {
+                port.onmessage = null
+                port = undefined
+            }
             return
         }
     }
@@ -264,15 +269,14 @@ export class RaylibJsWorker {
                 this.onStartFail(new Error(reason))
             }
         }
-        this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_TITLE] = ({ title }) => {
-            platform.updateTitle(title)
+        this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
+            platform.updateWindow(title, width, height)
         }
         this.handlers[RESPONSE_MESSAGE_TYPE.TRACE_LOG] = ({ logLevel, message, args }) => {
             platform.traceLog(logLevel, message, args)
         }
         /** Blocking platform API */
         this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = () => {}
-        this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS] = () => {}
         this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ family, source }) => {
             platform.addFont(new FontFace(family, source), source)
         }
@@ -293,11 +297,13 @@ export class RaylibJsWorker {
             [IMPL.BLOCKING]: () => {
                 switch (renderer) {
                 case RENDERER.MAIN_THREAD: {
+                    this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
+                        platform.updateWindow(title, width, height)
+                        canvas.width = width
+                        canvas.height = height
+                    }
                     this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] =
                         makeRenderHandlerFactories(canvas, rendering)
-                    this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS] = ({ property, value }) => {
-                        canvas[property] = value
-                    }
                     break
                 }
                 case RENDERER.WORKER_THREAD: {
@@ -340,9 +346,6 @@ export class RaylibJsWorker {
             this.startPromise = undefined
             this.onStartSuccess = undefined
             this.onStartFail = undefined
-            setTimeout(() => {
-                this.stop()
-            }, 1000)
         })
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.START,

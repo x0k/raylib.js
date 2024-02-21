@@ -112,7 +112,7 @@ export class RaylibJsBase {
         this.ctx.canvas.width = width;
         this.ctx.canvas.height = height;
         const buffer = this.wasm.instance.exports.memory.buffer;
-        this.platform.updateTitle(cstr_by_ptr(buffer, title_ptr))
+        this.platform.updateWindow(cstr_by_ptr(buffer, title_ptr), width, height);
     }
 
     WindowShouldClose() {

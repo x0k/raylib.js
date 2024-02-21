@@ -12,7 +12,7 @@ const LOG_NONE    = iota++; // Disable logging
 
 export function makePlatform({ canvas }) {
     return {
-        updateTitle(title) {
+        updateWindow(title) {
             document.title = title
         },
         traceLog(logLevel, text, args) {
@@ -47,7 +47,6 @@ export function makePlatform({ canvas }) {
             canvas.offsetHeight
             canvas.style.cssText += ';-webkit-transform:none'
         },
-        updateCanvas() {},
     }
 }
 
@@ -157,8 +156,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
 
     EndDrawing() {
         super.EndDrawing()
-        const imgData = this.ctx.getImageData(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
-        this.platform.render(imgData);
+        this.platform.render(this.ctx);
     }
 
 }
