@@ -18,6 +18,7 @@ const RESPONSE_MESSAGE_TYPE = {
     TRACE_LOG: 3,
     RENDER: 4,
     UPDATE_CANVAS: 5,
+    LOAD_FONT: 6,
 }
 
 function makePlatform({ self, rendering, renderer, rendererPort }) {
@@ -25,7 +26,7 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
         [RENDERER.MAIN_THREAD]: self,
         [RENDERER.WORKER_THREAD]: rendererPort,
     }[renderer]
-    const renderFactories = {
+    const render = {
         [RENDERING_CTX.DD]: (data) => {
             renderHandler.postMessage({
                 type: RESPONSE_MESSAGE_TYPE.RENDER,
@@ -44,7 +45,7 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                 data
             })
         }
-    }
+    }[rendering]
     return {
         updateTitle(title) {
             self.postMessage({
@@ -60,8 +61,15 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                 args,
             })
         },
-        addFont(font) {
+        addFont(font, source) {
+            renderHandler.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
+                family: font.family,
+                source
+            })
             self.fonts.add(font)
+            // TODO: this is not working in blocking mode
+            font.load()
         },
         loadImage(filename) {
             const img = {
@@ -88,7 +96,7 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                 value
             })
         },
-        render: renderFactories[rendering],
+        render,
     }
 }
 
@@ -172,8 +180,7 @@ function makeRenderHandlerFactories(ctx) {
     }
 }
 
-export function makeRendererMessagesHandler() {
-    let handler = undefined
+export function makeRendererMessagesHandler(self) {
     let port = undefined
     return (event) => {
         switch (event.data.type) {
@@ -182,7 +189,8 @@ export function makeRendererMessagesHandler() {
             const render = makeRenderHandlerFactories(
                 canvas.getContext("2d")
             )[rendering]
-            handler = (event) => {
+            port = sourcePort
+            port.onmessage = (event) => {
                 switch (event.data.type) {
                 case RESPONSE_MESSAGE_TYPE.RENDER:
                     render(event.data)
@@ -190,15 +198,24 @@ export function makeRendererMessagesHandler() {
                 case RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS:
                     canvas[event.data.property] = event.data.value
                     break
+                case RESPONSE_MESSAGE_TYPE.LOAD_FONT: {
+                    new FontFace(
+                        event.data.family,
+                        event.data.source,
+                    ).load(
+                        (f) => self.fonts.add(f),
+                        console.error,
+                    )
+                    break
+                }
+                default:
+                    console.error("Unhandled message", event)
                 }
             }
-            sourcePort.addEventListener("message", handler)
-            port = sourcePort
             return
         }
         case REQUEST_MESSAGE_TYPE.STOP:
-            port.removeEventListener("message", handler)
-            handler = undefined
+            port.onmessage = null
             port = undefined
             return
         }
@@ -255,32 +272,42 @@ export class RaylibJsWorker {
         /** Blocking platform API */
         this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = () => {}
         this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS] = () => {}
+        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ family, source }) => {
+            platform.addFont(new FontFace(family, source), source)
+        }
 
         const channel = new MessageChannel()
         // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
         const canvasFactories = {
             [IMPL.GAME_FRAME]: () => canvas.transferControlToOffscreen(),
             [IMPL.BLOCKING]: () => {
-                this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] =
+                switch (renderer) {
+                case RENDERER.MAIN_THREAD: {
+                    this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] =
                     makeRenderHandlerFactories(canvas.getContext("2d"))[rendering]
-                this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS] = ({ property, value }) => {
-                    canvas[property] = value
+                    this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS] = ({ property, value }) => {
+                        canvas[property] = value
+                    }
+                    break
                 }
+                case RENDERER.WORKER_THREAD: {
+                    const offscreen = canvas.transferControlToOffscreen()
+                    this.rendererWorker.postMessage({
+                        type: REQUEST_MESSAGE_TYPE.INIT,
+                        canvas: offscreen,
+                        rendering,
+                        sourcePort: channel.port1
+                    }, [offscreen, channel.port1])
+                    break
+                }
+                default:
+                    throw new Error(`Unknown renderer: ${renderer}`)
+                }
+                // Fake canvas to measure the text in worker thread
                 return new OffscreenCanvas(800, 600)
             }
         }
-        let offscreen = canvasFactories[impl]()
-        if (renderer === RENDERER.WORKER_THREAD) {
-            this.rendererWorker.postMessage({
-                type: REQUEST_MESSAGE_TYPE.INIT,
-                canvas: offscreen,
-                rendering,
-                sourcePort: channel.port1
-            }, [offscreen, channel.port1])
-            // Fake canvas to measure the text in worker thread
-            offscreen = new OffscreenCanvas(800, 600)
-        }
-
+        const offscreen = canvasFactories[impl]()
         this.worker.addEventListener("message", this.handleMessage)
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.INIT,

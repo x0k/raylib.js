@@ -1,3 +1,12 @@
 import { makeRendererMessagesHandler } from './raylib_worker.js';
 
-onmessage = makeRendererMessagesHandler()
+const font = new FontFace(
+  "grixel",
+  "url(fonts/acme_7_wide_xtnd.woff)",
+)
+
+self.fonts.add(font);
+
+font.load().catch(console.error)
+
+onmessage = makeRendererMessagesHandler(self)

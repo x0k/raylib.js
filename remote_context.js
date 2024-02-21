@@ -230,19 +230,17 @@ export function makeRemoteContext(send, ctx, initialData) {
 
 export function makeBatchedRemoteContext(ctx, initialData) {
     const batch = []
-    const { getImageData, ...rest } = makeRemoteContext(
+    const remoteCtx = makeRemoteContext(
         (action) => { batch.push(action) },
         ctx,
         initialData
     )
-    return {
-        ...rest,
-        getImageData() {
-            // Reset
-            getImageData()
-            const data = batch.slice()
-            batch.length = 0
-            return data
-        }
+    const reset = remoteCtx.getImageData
+    remoteCtx.getImageData = () => {
+        const data = batch.slice()
+        batch.length = 0
+        reset()
+        return data
     }
+    return remoteCtx
 }

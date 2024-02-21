@@ -28,7 +28,10 @@ export function makePlatform({ canvas }) {
             }
         },
         addFont(font) {
-            document.fonts.add(font)
+            font.load(
+                f => document.fonts.add(f),
+                console.error,
+            )
         },
         loadImage(filename) {
             var img = new Image();
