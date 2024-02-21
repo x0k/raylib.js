@@ -83,10 +83,19 @@ export class RaylibJs extends RaylibJsBase {
     }
 }
 
+export const EVENT_TYPE = {
+    STOP: 0,
+    KEY_DOWN: 1,
+    KEY_UP: 2,
+    WHEEL_MOVE: 3,
+    MOUSE_MOVE: 4,
+}
+
 export class BlockingRaylibJs extends RaylibJsBase {
 
-    constructor(canvas, platform) {
+    constructor(canvas, platform, eventsQueue) {
         super(canvas, platform);
+        this.eventsQueue = eventsQueue
         this.windowShouldClose = false
         this.frameTime = undefined
     }
@@ -114,8 +123,30 @@ export class BlockingRaylibJs extends RaylibJsBase {
         this.windowShouldClose = false
     }
 
-    // TODO: Pull events from the queue
+    handleEvent = (event) => {
+        switch (event.type) {
+        case EVENT_TYPE.MOUSE_MOVE:
+            this.handleMouseMove(event.data)
+            return
+        case EVENT_TYPE.KEY_UP:
+            this.handleKeyUp(event.data)
+            return
+        case EVENT_TYPE.KEY_DOWN:
+            this.handleKeyDown(event.data)
+            return
+        case EVENT_TYPE.WHEEL_MOVE:
+            this.handleWheelMove(event.data)
+            return
+        case EVENT_TYPE.STOP:
+            this.stop()
+            return
+        default:
+            throw new Error(`Unknown event type: ${event.type}`);
+        }
+    }
+
     BeginDrawing() {
+        this.eventsQueue.pop(this.handleEvent)
         let now
         do {
             now = performance.now()

@@ -1,4 +1,6 @@
+import { SharedQueue } from './shared_queue.js'
 import { applyCtxAction } from './remote_context.js'
+import { EVENT_TYPE } from './raylib.js'
 import { createRaylib, IMPL, RENDERING_CTX } from './raylib_factory.js'
 
 const REQUEST_MESSAGE_TYPE = {
@@ -108,7 +110,8 @@ export function makeWorkerMessagesHandler(self) {
         impl,
         rendering,
         renderer,
-        rendererPort
+        rendererPort,
+        eventsBuffer
     }) => {
         if (raylibJs) {
             raylibJs.stop()
@@ -123,6 +126,7 @@ export function makeWorkerMessagesHandler(self) {
                 rendererPort,
             }),
             rendering,
+            eventsQueue: new EventsQueue(eventsBuffer),
         })
     }
     handlers[REQUEST_MESSAGE_TYPE.START] = async ({ params }) => {
@@ -143,17 +147,17 @@ export function makeWorkerMessagesHandler(self) {
     handlers[REQUEST_MESSAGE_TYPE.STOP] = () => {
         raylibJs.stop()
     }
-    handlers[REQUEST_MESSAGE_TYPE.KEY_DOWN] = ({ keyCode }) => {
-        raylibJs.handleKeyDown(keyCode)
+    handlers[REQUEST_MESSAGE_TYPE.KEY_DOWN] = ({ data }) => {
+        raylibJs.handleKeyDown(data)
     }
-    handlers[REQUEST_MESSAGE_TYPE.KEY_UP] = ({ keyCode }) => {
-        raylibJs.handleKeyUp(keyCode)
+    handlers[REQUEST_MESSAGE_TYPE.KEY_UP] = ({ data }) => {
+        raylibJs.handleKeyUp(data)
     }
-    handlers[REQUEST_MESSAGE_TYPE.WHEEL_MOVE] = ({ direction }) => {
-        raylibJs.handleWheelMove(direction)
+    handlers[REQUEST_MESSAGE_TYPE.WHEEL_MOVE] = ({ data }) => {
+        raylibJs.handleWheelMove(data)
     }
-    handlers[REQUEST_MESSAGE_TYPE.MOUSE_MOVE] = ({ position }) => {
-        raylibJs.handleMouseMove(position)
+    handlers[REQUEST_MESSAGE_TYPE.MOUSE_MOVE] = ({ data }) => {
+        raylibJs.handleMouseMove(data)
     }
     return (event) => {
         if (handlers[event.data.type]) {
@@ -244,10 +248,13 @@ export class RaylibJsWorker {
         impl,
         rendering,
         renderer,
-        rendererWorker
+        rendererWorker,
     }) {
         this.worker = worker
         this.rendererWorker = rendererWorker
+        // For manage event commits
+        this.impl = impl
+        this.nextCommitId = undefined
         this.startPromise = undefined
         this.onStartSuccess = undefined
         this.onStartFail = undefined
@@ -276,9 +283,16 @@ export class RaylibJsWorker {
             platform.addFont(new FontFace(family, source), source)
         }
 
+        const eventsBuffer = new SharedArrayBuffer(4096)
+        this.eventsQueue = new EventsQueue(eventsBuffer)
+        this.eventsSender = {
+            [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
+            [IMPL.BLOCKING]: (event) => this.eventsQueue.push(event),
+        }[impl]
+
         const channel = new MessageChannel()
         // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
-        const canvasFactories = {
+        const offscreen = {
             [IMPL.GAME_FRAME]: () => canvas.transferControlToOffscreen(),
             [IMPL.BLOCKING]: () => {
                 switch (renderer) {
@@ -306,16 +320,16 @@ export class RaylibJsWorker {
                 // Fake canvas to measure the text in worker thread
                 return new OffscreenCanvas(800, 600)
             }
-        }
-        const offscreen = canvasFactories[impl]()
+        }[impl]()
         this.worker.addEventListener("message", this.handleMessage)
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.INIT,
             canvas: offscreen,
+            eventsBuffer,
             rendering,
             impl,
             renderer,
-            rendererPort: channel.port2
+            rendererPort: channel.port2,
         }, [offscreen, channel.port2])
     }
 
@@ -335,12 +349,23 @@ export class RaylibJsWorker {
             type: REQUEST_MESSAGE_TYPE.START,
             params
         })
+        if (this.impl === IMPL.BLOCKING) {
+            const commitEvents = () => {
+                this.eventsQueue.commit()
+                this.nextCommitId = requestAnimationFrame(commitEvents)
+            }
+            this.nextCommitId = requestAnimationFrame(commitEvents)
+        }
         return this.startPromise
     }
 
     stop() {
-        this.worker.postMessage({
-            type: REQUEST_MESSAGE_TYPE.STOP
+        if (this.impl === IMPL.BLOCKING) {
+            cancelAnimationFrame(this.nextCommitId)
+        }
+        this.eventsSender({
+            type: REQUEST_MESSAGE_TYPE.STOP,
+            data: 0,
         })
         this.worker.removeEventListener("message", this.handleMessage)
         if (this.rendererWorker) {
@@ -350,32 +375,58 @@ export class RaylibJsWorker {
         }
     }
 
-    handleKeyDown(keyCode) {
-        this.worker.postMessage({
+    handleKeyDown(data) {
+        this.eventsSender({
             type: REQUEST_MESSAGE_TYPE.KEY_DOWN,
-            keyCode
+            data
         })
     }
 
-    handleKeyUp(keyCode) {
-        this.worker.postMessage({
+    handleKeyUp(data) {
+        this.eventsSender({
             type: REQUEST_MESSAGE_TYPE.KEY_UP,
-            keyCode
+            data
         })
     }
 
-    handleWheelMove(direction) {
-        this.worker.postMessage({
+    handleWheelMove(data) {
+        this.eventsSender({
             type: REQUEST_MESSAGE_TYPE.WHEEL_MOVE,
-            direction
+            data
         })
     }
 
-    handleMouseMove(position) {
-        this.worker.postMessage({
+    handleMouseMove(data) {
+        this.eventsSender({
             type: REQUEST_MESSAGE_TYPE.MOUSE_MOVE,
-            position
+            data
         })
     }
 
+}
+
+const MESSAGE_TYPE_TO_EVENT_TYPE = {
+    [REQUEST_MESSAGE_TYPE.KEY_DOWN]: EVENT_TYPE.KEY_DOWN,
+    [REQUEST_MESSAGE_TYPE.KEY_UP]: EVENT_TYPE.KEY_UP,
+    [REQUEST_MESSAGE_TYPE.WHEEL_MOVE]: EVENT_TYPE.WHEEL_MOVE,
+    [REQUEST_MESSAGE_TYPE.MOUSE_MOVE]: EVENT_TYPE.MOUSE_MOVE,
+    [REQUEST_MESSAGE_TYPE.STOP]: EVENT_TYPE.STOP,
+}
+
+class EventsQueue extends SharedQueue {
+  constructor(sharedMemoryBuffer) {
+    super(new Int32Array(sharedMemoryBuffer));
+  }
+
+  push({ type, data }) {
+    // TODO: properly encode the mouse position
+    super.push((MESSAGE_TYPE_TO_EVENT_TYPE[type] << 16) | data)
+  }
+
+  pop(handler) {
+    super.pop((el) => handler({
+        type: el >> 16,
+        data: el & 0xffff
+    }))
+  }
 }

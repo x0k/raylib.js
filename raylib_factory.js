@@ -62,7 +62,8 @@ export function createRaylib({
     impl,
     canvas,
     platform,
-    rendering
+    rendering,
+    eventsQueue,
 }) {
     switch (impl) {
     case IMPL.GAME_FRAME: {
@@ -71,7 +72,7 @@ export function createRaylib({
     }
     case IMPL.BLOCKING: {
         const ctx = remoteContextFactories[rendering]({ canvas, platform })
-        return new BlockingRaylibJs(ctx, platform)
+        return new BlockingRaylibJs(ctx, platform, eventsQueue)
     }
     default:
         throw new Error(`Unknown impl: ${impl}`)
