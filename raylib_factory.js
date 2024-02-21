@@ -10,6 +10,7 @@ export const RENDERING_CTX = {
     DD: "2d",
     REMOTE_2D: "remote2d",
     BATCHED_REMOTE_2D: "batchedRemote2d",
+    BITMAP: "bitmap",
 }
 
 const remoteContextFactories = {
@@ -19,7 +20,8 @@ const remoteContextFactories = {
             willReadFrequently: true
         }), {
             get(target, prop) {
-                if (prop === "canvas") {
+                switch (prop) {
+                case "canvas":
                     return canvasProxy ??= new Proxy(target.canvas, {
                         get(target, prop) {
                             return target[prop]
@@ -32,8 +34,9 @@ const remoteContextFactories = {
                             return true
                         }
                     })
+                default:
+                    return target[prop].bind(target)
                 }
-                return target[prop].bind(target)
             },
             set(target, prop, value) {
                 target[prop] = value
@@ -56,6 +59,36 @@ const remoteContextFactories = {
             height: canvas.height,
         }
     ),
+    [RENDERING_CTX.BITMAP]: ({ canvas, platform }) => {
+        let canvasProxy
+        return new Proxy(canvas.getContext('2d'), {
+            get(target, prop) {
+                switch (prop) {
+                case "canvas":
+                    return canvasProxy ??= new Proxy(target.canvas, {
+                        get(target, prop) {
+                            return target[prop]
+                        },
+                        set(target, prop, value) {
+                            if (prop === "width" || prop === "height") {
+                                platform.updateCanvas(prop, value)
+                            }
+                            target[prop] = value
+                            return true
+                        }
+                    })
+                case "getImageData":
+                    return () => target.canvas.transferToImageBitmap()
+                default:
+                    return target[prop].bind(target)
+                }
+            },
+            set(target, prop, value) {
+                target[prop] = value
+                return true
+            }
+        })
+    },
 }
 
 export function createRaylib({
@@ -71,6 +104,7 @@ export function createRaylib({
         return new RaylibJs(ctx, platform)
     }
     case IMPL.BLOCKING: {
+        const canvas = new OffscreenCanvas(0, 0)
         const ctx = remoteContextFactories[rendering]({ canvas, platform })
         return new BlockingRaylibJs(ctx, platform, eventsQueue)
     }

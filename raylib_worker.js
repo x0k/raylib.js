@@ -46,7 +46,14 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                 type: RESPONSE_MESSAGE_TYPE.RENDER,
                 data
             })
-        }
+        },
+        [RENDERING_CTX.BITMAP]: (data) => {
+            renderHandler.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.RENDER,
+                data,
+            })
+            data.close()
+        },
     }[rendering]
     return {
         updateTitle(title) {
@@ -168,7 +175,15 @@ export function makeWorkerMessagesHandler(self) {
     }
 }
 
-function makeRenderHandlerFactories(ctx) {
+const RENDERING_TO_CONTEXT = {
+    [RENDERING_CTX.DD]: "2d",
+    [RENDERING_CTX.REMOTE_2D]: "2d",
+    [RENDERING_CTX.BATCHED_REMOTE_2D]: "2d",
+    [RENDERING_CTX.BITMAP]: "bitmaprenderer",
+}
+
+function makeRenderHandlerFactories(canvas, rendering) {
+    const ctx = canvas.getContext(RENDERING_TO_CONTEXT[rendering])
     return {
         [RENDERING_CTX.DD]: ({ data }) => {
             ctx.putImageData(data, 0, 0)
@@ -181,7 +196,10 @@ function makeRenderHandlerFactories(ctx) {
                 applyCtxAction(ctx, data[i])
             }
         },
-    }
+        [RENDERING_CTX.BITMAP]: ({ data }) => {
+            ctx.transferFromImageBitmap(data)
+        },
+    }[rendering]
 }
 
 export function makeRendererMessagesHandler(self) {
@@ -190,9 +208,7 @@ export function makeRendererMessagesHandler(self) {
         switch (event.data.type) {
         case REQUEST_MESSAGE_TYPE.INIT: {
             const { canvas, rendering, sourcePort } = event.data
-            const render = makeRenderHandlerFactories(
-                canvas.getContext("2d")
-            )[rendering]
+            const render = makeRenderHandlerFactories(canvas, rendering)
             port = sourcePort
             port.onmessage = (event) => {
                 switch (event.data.type) {
@@ -300,7 +316,7 @@ export class RaylibJsWorker {
                 switch (renderer) {
                 case RENDERER.MAIN_THREAD: {
                     this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] =
-                    makeRenderHandlerFactories(canvas.getContext("2d"))[rendering]
+                        makeRenderHandlerFactories(canvas, rendering)
                     this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_CANVAS] = ({ property, value }) => {
                         canvas[property] = value
                     }
@@ -346,6 +362,9 @@ export class RaylibJsWorker {
             this.startPromise = undefined
             this.onStartSuccess = undefined
             this.onStartFail = undefined
+            setTimeout(() => {
+                this.stop()
+            }, 1000)
         })
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.START,
