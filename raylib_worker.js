@@ -283,7 +283,9 @@ export class RaylibJsWorker {
             platform.addFont(new FontFace(family, source), source)
         }
 
-        const eventsBuffer = new SharedArrayBuffer(4096)
+        const eventsBuffer = window.SharedArrayBuffer
+            ? new SharedArrayBuffer(1024)
+            : new ArrayBuffer(1024)
         this.eventsQueue = new EventsQueue(eventsBuffer)
         this.eventsSender = {
             [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
@@ -419,14 +421,31 @@ class EventsQueue extends SharedQueue {
   }
 
   push({ type, data }) {
-    // TODO: properly encode the mouse position
-    super.push((MESSAGE_TYPE_TO_EVENT_TYPE[type] << 16) | data)
+    const t = MESSAGE_TYPE_TO_EVENT_TYPE[type]
+    super.push(t)
+    switch (type) {
+    case REQUEST_MESSAGE_TYPE.MOUSE_MOVE: {
+        super.push(data.x)
+        super.push(data.y)
+        return
+    }
+    default:
+        super.push(data)
+    }
   }
 
   pop(handler) {
-    super.pop((el) => handler({
-        type: el >> 16,
-        data: el & 0xffff
-    }))
+    const gen = super.read()
+    for (const type of gen) {
+        switch(type) {
+        case EVENT_TYPE.MOUSE_MOVE:
+            const x = gen.next().value
+            const y = gen.next().value
+            handler({ type, data: { x, y } })
+            break
+        default:
+            handler({ type, data: gen.next().value })
+        }
+    }
   }
 }

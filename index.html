@@ -56,9 +56,17 @@
             font-family: grixel;
             src: url(fonts/acme_7_wide_xtnd.woff);
         }
+
+        .warning-msg {
+            color: red;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
+    <div id="buffer-warning" class="warning-msg">
+        SharedArrayBuffer is not available.
+    </div>
     <label for="raylib-example-select">Choose an Example:</label>
     <select id="raylib-example-select" class="raylib-select" onchange="run()">
         <!-- This is populated by js -->
@@ -193,6 +201,12 @@
             }
         }
 
+        function makeWarningShower(element) {
+            return () => {
+                element.style.display = window.SharedArrayBuffer ? "none" : "block";
+            }
+        }
+
         const wasmPaths = {
             "tsoding": ["tsoding_ball", "tsoding_snake",],
             "core": ["core_basic_window", "core_basic_screen_manager", "core_input_keys", "core_input_mouse_wheel",],
@@ -298,7 +312,11 @@
                 isValid: (value) => value in renderers
             }
         )
+        const showWarning = makeWarningShower(
+            document.getElementById("buffer-warning")
+        )
         window.run = () => {
+            showWarning()
             updateQuery()
             run()
         }
@@ -314,7 +332,7 @@
                         <p>Please navigate to this location using a web server.</p>
                         <p>If you have Python 3 on your system you can just do:</p>
                     </div>
-                    <code>$ python3 -m http.server 6969</code>
+                    <code>$ python3 server.py</code>
                 </div>
                 `;
         })

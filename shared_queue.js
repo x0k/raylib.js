@@ -39,4 +39,14 @@ export class SharedQueue {
     }
   }
 
+  *read() {
+    this.index = Atomics.load(this.array, this.lastIndex)
+    if (this.index === this.lastIndex) {
+      return
+    }
+    while (this.index !== this.nextLastIndex()) {
+      yield this.array[this.lastIndex]
+    }
+  }
+
 }
