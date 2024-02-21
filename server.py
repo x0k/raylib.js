@@ -7,7 +7,7 @@ class CustomHandler(SimpleHTTPRequestHandler):
         SimpleHTTPRequestHandler.end_headers(self)
 
 if __name__ == '__main__':
-    server_address = ('', 6969) 
+    server_address = ('', 6969)
     httpd = HTTPServer(server_address, CustomHandler)
     print('Server running at http://localhost:6969/')
     httpd.serve_forever()
