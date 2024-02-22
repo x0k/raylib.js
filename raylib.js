@@ -88,6 +88,7 @@ export const EVENT_TYPE = {
     KEY_UP: 2,
     WHEEL_MOVE: 3,
     MOUSE_MOVE: 4,
+    LOAD_FONT: 5,
 }
 
 export class BlockingRaylibJs extends RaylibJsBase {

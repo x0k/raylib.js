@@ -21,11 +21,26 @@ const RESPONSE_MESSAGE_TYPE = {
     LOAD_FONT: 5,
 }
 
-function makePlatform({ self, rendering, renderer, rendererPort }) {
+function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
     const renderHandler = {
         [RENDERER.MAIN_THREAD]: self,
         [RENDERER.WORKER_THREAD]: rendererPort,
     }[renderer]
+    const addFont = {
+        [IMPL.GAME_FRAME]: (font) => {
+            font.load().then(
+                f => self.fonts.add(f),
+                console.error,
+            )
+        },
+        [IMPL.BLOCKING]: (font, fileName) => {
+            self.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
+                family: font.family,
+                fileName
+            })
+        }
+    }[impl]
     const render = {
         [RENDERING_CTX.DD]: (ctx) => {
             const data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height)
@@ -67,16 +82,7 @@ function makePlatform({ self, rendering, renderer, rendererPort }) {
                 args,
             })
         },
-        addFont(font, source) {
-            renderHandler.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                family: font.family,
-                source
-            })
-            self.fonts.add(font)
-            // TODO: this is not working in blocking mode
-            font.load()
-        },
+        addFont,
         loadImage(filename) {
             const img = {
                 status: "loading",
@@ -118,6 +124,7 @@ export function makeWorkerMessagesHandler(self) {
             canvas,
             platform: makePlatform({
                 self,
+                impl,
                 rendering,
                 renderer,
                 rendererPort,
@@ -199,16 +206,6 @@ export function makeRendererMessagesHandler(self) {
                     canvas.width = event.data.width
                     canvas.height = event.data.height
                     break
-                case RESPONSE_MESSAGE_TYPE.LOAD_FONT: {
-                    new FontFace(
-                        event.data.family,
-                        event.data.source,
-                    ).load(
-                        (f) => self.fonts.add(f),
-                        console.error,
-                    )
-                    break
-                }
                 default:
                     console.error("Unhandled message", event)
                 }
@@ -277,8 +274,15 @@ export class RaylibJsWorker {
         }
         /** Blocking platform API */
         this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = () => {}
-        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ family, source }) => {
-            platform.addFont(new FontFace(family, source), source)
+        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ family, fileName }) => {
+            fetch(fileName).then(r => r.arrayBuffer()).then(
+                (buffer) => this.eventsSender({
+                    type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
+                    family,
+                    buffer,
+                }),
+                console.error,
+            )
         }
 
         const eventsBuffer = window.SharedArrayBuffer
@@ -413,6 +417,7 @@ const MESSAGE_TYPE_TO_EVENT_TYPE = {
     [REQUEST_MESSAGE_TYPE.WHEEL_MOVE]: EVENT_TYPE.WHEEL_MOVE,
     [REQUEST_MESSAGE_TYPE.MOUSE_MOVE]: EVENT_TYPE.MOUSE_MOVE,
     [REQUEST_MESSAGE_TYPE.STOP]: EVENT_TYPE.STOP,
+    [REQUEST_MESSAGE_TYPE.LOAD_FONT]: EVENT_TYPE.LOAD_FONT,
 }
 
 class EventsQueue extends SharedQueue {
