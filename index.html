@@ -66,7 +66,7 @@
     <script src="enable-threads.js"></script>
 </head>
 <body>
-    <div id="buffer-warning" class="warning-msg">
+    <div id="buffer-warning" class="warning-msg" hidden>
         SharedArrayBuffer is not available.
     </div>
     <label for="raylib-example-select">Choose an Example:</label>
@@ -205,7 +205,7 @@
 
         function makeWarningShower(element) {
             return () => {
-                element.style.display = window.SharedArrayBuffer ? "none" : "block";
+                element.hidden = Boolean(window.SharedArrayBuffer)
             }
         }
 
