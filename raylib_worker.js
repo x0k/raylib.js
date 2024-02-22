@@ -40,7 +40,14 @@ function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
                 family,
                 fileName,
             })
-        }
+        },
+        [IMPL.LOCKING]: (family, fileName) => {
+            self.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
+                family,
+                fileName,
+            })
+        },
     }[impl]
     const render = {
         [RENDERING_CTX.DD]: (ctx) => {
@@ -118,7 +125,8 @@ export function makeWorkerMessagesHandler(self) {
         rendering,
         renderer,
         rendererPort,
-        eventsBuffer
+        eventsBuffer,
+        statusBuffer,
     }) => {
         if (raylibJs) {
             raylibJs.stop()
@@ -135,6 +143,7 @@ export function makeWorkerMessagesHandler(self) {
             }),
             rendering,
             eventsQueue: new EventsQueue(eventsBuffer),
+            statusBuffer,
         })
     }
     handlers[REQUEST_MESSAGE_TYPE.START] = async ({ params }) => {
@@ -254,7 +263,7 @@ export class RaylibJsWorker {
         this.rendererWorker = rendererWorker
         // For manage event commits
         this.impl = impl
-        this.nextCommitId = undefined
+        this.animationFrameId = undefined
         this.startPromise = undefined
         this.onStartSuccess = undefined
         this.onStartFail = undefined
@@ -298,14 +307,25 @@ export class RaylibJsWorker {
         this.eventsSender = {
             [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
             [IMPL.BLOCKING]: (event) => this.eventsQueue.push(event),
+            [IMPL.LOCKING]: (event) => this.eventsQueue.push(event),
         }[impl]
+
+        const statusBuffer = window.SharedArrayBuffer
+            ? new SharedArrayBuffer(4)
+            : new ArrayBuffer(4)
+        this.status = new Int32Array(statusBuffer)
 
         const channel = new MessageChannel()
         // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
-        const offscreen = {
-            [IMPL.GAME_FRAME]: () => canvas.transferControlToOffscreen(),
-            [IMPL.BLOCKING]: () => {
-                switch (renderer) {
+        let offscreen = undefined
+        switch (impl) {
+        case IMPL.GAME_FRAME: {
+            offscreen = canvas.transferControlToOffscreen()
+            break
+        }
+        case IMPL.LOCKING:
+        case IMPL.BLOCKING: {
+            switch (renderer) {
                 case RENDERER.MAIN_THREAD: {
                     this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
                         platform.updateWindow(title, width, height)
@@ -330,14 +350,18 @@ export class RaylibJsWorker {
                     throw new Error(`Unknown renderer: ${renderer}`)
                 }
                 // Fake canvas to measure the text in worker thread
-                return new OffscreenCanvas(800, 600)
-            }
-        }[impl]()
+                offscreen = new OffscreenCanvas(800, 600)
+                break
+        }
+        default:
+            throw new Error(`Unknown impl: ${impl}`)
+        }
         this.worker.addEventListener("message", this.handleMessage)
         this.worker.postMessage({
             type: REQUEST_MESSAGE_TYPE.INIT,
             canvas: offscreen,
             eventsBuffer,
+            statusBuffer,
             rendering,
             impl,
             renderer,
@@ -361,19 +385,35 @@ export class RaylibJsWorker {
             type: REQUEST_MESSAGE_TYPE.START,
             params
         })
-        if (this.impl === IMPL.BLOCKING) {
+        switch (this.impl) {
+        case IMPL.BLOCKING: {
             const commitEvents = () => {
                 this.eventsQueue.commit()
-                this.nextCommitId = requestAnimationFrame(commitEvents)
+                this.animationFrameId = requestAnimationFrame(commitEvents)
             }
-            this.nextCommitId = requestAnimationFrame(commitEvents)
+            this.animationFrameId = requestAnimationFrame(commitEvents)
+            break
+        }
+        case IMPL.LOCKING: {
+            const commitEvents = () => {
+                this.eventsQueue.commit()
+                Atomics.notify(this.status, 0)
+                this.animationFrameId = requestAnimationFrame(commitEvents)
+            }
+            this.animationFrameId = requestAnimationFrame(commitEvents)
+            break
+        }
         }
         return this.startPromise
     }
 
     stop() {
-        if (this.impl === IMPL.BLOCKING) {
-            cancelAnimationFrame(this.nextCommitId)
+        switch (this.impl) {
+        case IMPL.BLOCKING:
+        case IMPL.LOCKING: {
+            cancelAnimationFrame(this.animationFrameId)
+            break
+        }
         }
         this.eventsSender({
             type: REQUEST_MESSAGE_TYPE.STOP,

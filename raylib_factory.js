@@ -1,8 +1,9 @@
-import { BlockingRaylibJs, RaylibJs } from './raylib.js'
+import { BlockingRaylibJs, RaylibJs, LockingRaylibJs } from './raylib.js'
 
 export const IMPL = {
     GAME_FRAME: "gameFrame",
     BLOCKING: "blocking",
+    LOCKING: "locking",
 }
 
 export const RENDERING_CTX = {
@@ -23,6 +24,7 @@ export function createRaylib({
     platform,
     rendering,
     eventsQueue,
+    statusBuffer,
 }) {
     switch (impl) {
     case IMPL.GAME_FRAME: {
@@ -33,6 +35,11 @@ export function createRaylib({
         const canvas = new OffscreenCanvas(0, 0)
         const ctx = remoteContextFactories[rendering](canvas)
         return new BlockingRaylibJs(ctx, platform, eventsQueue)
+    }
+    case IMPL.LOCKING: {
+        const canvas = new OffscreenCanvas(0, 0)
+        const ctx = remoteContextFactories[rendering](canvas)
+        return new LockingRaylibJs(ctx, platform, eventsQueue, statusBuffer)
     }
     default:
         throw new Error(`Unknown impl: ${impl}`)

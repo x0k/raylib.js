@@ -165,6 +165,23 @@ export class BlockingRaylibJs extends RaylibJsBase {
 
 }
 
+
+export class LockingRaylibJs extends BlockingRaylibJs {
+    constructor(canvas, platform, eventsQueue, statusBuffer) {
+        super(canvas, platform, eventsQueue);
+        this.status = new Int32Array(statusBuffer);
+    }
+
+    BeginDrawing() {
+        Atomics.wait(this.status, 0, 0);
+        this.eventsQueue.pop(this.handleEvent)
+        const now = performance.now();
+        this.dt = (now - this.previous)/1000.0;
+        this.previous = now;
+    }
+
+}
+
 export const glfwKeyMapping = {
     "Space":          32,
     "Quote":          39,
