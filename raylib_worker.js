@@ -68,6 +68,12 @@ function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
                 width,
                 height,
             })
+            rendererPort.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW,
+                title,
+                width,
+                height,
+            })
         },
         traceLog(logLevel, message, args) {
             self.postMessage({
@@ -311,15 +317,6 @@ export class RaylibJsWorker {
                     break
                 }
                 case RENDERER.WORKER_THREAD: {
-                    this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
-                        platform.updateWindow(title, width, height)
-                        this.rendererWorker.postMessage({
-                            type: REQUEST_MESSAGE_TYPE.UPDATE_WINDOW,
-                            title,
-                            width,
-                            height
-                        })
-                    }
                     const offscreen = canvas.transferControlToOffscreen()
                     this.rendererWorker.postMessage({
                         type: REQUEST_MESSAGE_TYPE.INIT,
