@@ -10,6 +10,7 @@ const REQUEST_MESSAGE_TYPE = {
     KEY_UP: 4,
     WHEEL_MOVE: 5,
     MOUSE_MOVE: 6,
+    ADD_FONT: 7,
 }
 
 const RESPONSE_MESSAGE_TYPE = {
@@ -26,18 +27,18 @@ function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
         [RENDERER.MAIN_THREAD]: self,
         [RENDERER.WORKER_THREAD]: rendererPort,
     }[renderer]
-    const addFont = {
-        [IMPL.GAME_FRAME]: (font) => {
-            font.load().then(
+    const loadFont = {
+        [IMPL.GAME_FRAME]: (family, fileName) => {
+            new FontFace(family, `url(${fileName})`).load().then(
                 f => self.fonts.add(f),
                 console.error,
             )
         },
-        [IMPL.BLOCKING]: (font, fileName) => {
+        [IMPL.BLOCKING]: (family, fileName) => {
             self.postMessage({
                 type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                family: font.family,
-                fileName
+                family,
+                fileName,
             })
         }
     }[impl]
@@ -67,12 +68,6 @@ function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
                 width,
                 height,
             })
-            rendererPort.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW,
-                title,
-                width,
-                height,
-            })
         },
         traceLog(logLevel, message, args) {
             self.postMessage({
@@ -82,7 +77,10 @@ function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
                 args,
             })
         },
-        addFont,
+        loadFont,
+        addFont(font) {
+            self.fonts.add(new FontFace(font.family, font.buffer))
+        },
         loadImage(filename) {
             const img = {
                 status: "loading",
@@ -276,18 +274,20 @@ export class RaylibJsWorker {
         this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = () => {}
         this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ family, fileName }) => {
             fetch(fileName).then(r => r.arrayBuffer()).then(
-                (buffer) => this.eventsSender({
-                    type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                    family,
-                    buffer,
+                (buffer) => this.eventsQueue.push({
+                    type: REQUEST_MESSAGE_TYPE.ADD_FONT,
+                    data: {
+                        family,
+                        buffer,
+                    }
                 }),
                 console.error,
             )
         }
 
         const eventsBuffer = window.SharedArrayBuffer
-            ? new SharedArrayBuffer(1024)
-            : new ArrayBuffer(1024)
+            ? new SharedArrayBuffer(204800)
+            : new ArrayBuffer(204800)
         this.eventsQueue = new EventsQueue(eventsBuffer)
         this.eventsSender = {
             [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
@@ -311,6 +311,15 @@ export class RaylibJsWorker {
                     break
                 }
                 case RENDERER.WORKER_THREAD: {
+                    this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
+                        platform.updateWindow(title, width, height)
+                        this.rendererWorker.postMessage({
+                            type: REQUEST_MESSAGE_TYPE.UPDATE_WINDOW,
+                            title,
+                            width,
+                            height
+                        })
+                    }
                     const offscreen = canvas.transferControlToOffscreen()
                     this.rendererWorker.postMessage({
                         type: REQUEST_MESSAGE_TYPE.INIT,
@@ -417,39 +426,62 @@ const MESSAGE_TYPE_TO_EVENT_TYPE = {
     [REQUEST_MESSAGE_TYPE.WHEEL_MOVE]: EVENT_TYPE.WHEEL_MOVE,
     [REQUEST_MESSAGE_TYPE.MOUSE_MOVE]: EVENT_TYPE.MOUSE_MOVE,
     [REQUEST_MESSAGE_TYPE.STOP]: EVENT_TYPE.STOP,
-    [REQUEST_MESSAGE_TYPE.LOAD_FONT]: EVENT_TYPE.LOAD_FONT,
+    [REQUEST_MESSAGE_TYPE.ADD_FONT]: EVENT_TYPE.ADD_FONT,
 }
 
-class EventsQueue extends SharedQueue {
+class EventsQueue {
   constructor(sharedMemoryBuffer) {
-    super(new Int32Array(sharedMemoryBuffer));
+    this.queue = new SharedQueue(sharedMemoryBuffer)
   }
 
   push({ type, data }) {
-    const t = MESSAGE_TYPE_TO_EVENT_TYPE[type]
-    super.push(t)
+    this.queue.pushUint(MESSAGE_TYPE_TO_EVENT_TYPE[type])
     switch (type) {
     case REQUEST_MESSAGE_TYPE.MOUSE_MOVE: {
-        super.push(data.x)
-        super.push(data.y)
+        this.queue.pushFloat(data.x)
+        this.queue.pushFloat(data.y)
+        return
+    }
+    case REQUEST_MESSAGE_TYPE.ADD_FONT: {
+        this.queue.pushString(data.family)
+        this.queue.pushBytes(new Uint8Array(data.buffer))
         return
     }
     default:
-        super.push(data)
+        this.queue.pushInt(data)
+        return
     }
   }
 
+  commit() {
+    this.queue.commit()
+  }
+
   pop(handler) {
-    const gen = super.read()
-    for (const type of gen) {
+      const gen = this.queue.read()
+      for (const item of gen) {
+        const type = item.uint
         switch(type) {
         case EVENT_TYPE.MOUSE_MOVE:
-            const x = gen.next().value
-            const y = gen.next().value
-            handler({ type, data: { x, y } })
+            handler({
+                type,
+                data: {
+                    x: gen.next().value.float,
+                    y: gen.next().value.float,
+                }
+            })
+            break
+        case EVENT_TYPE.ADD_FONT:
+            handler({
+                type,
+                data: {
+                    family: gen.next().value.string,
+                    buffer: gen.next().value.bytes.buffer
+                }
+            })
             break
         default:
-            handler({ type, data: gen.next().value })
+            handler({ type, data: gen.next().value.int })
         }
     }
   }

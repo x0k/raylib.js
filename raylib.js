@@ -27,8 +27,8 @@ export function makePlatform({ canvas }) {
             case LOG_NONE:    console.log(`NONE: ${text} ${args}`);    break;
             }
         },
-        addFont(font) {
-            font.load(
+        loadFont(family, fileName) {
+            new FontFace(family, `url(${fileName})`).load().then(
                 f => document.fonts.add(f),
                 console.error,
             )
@@ -88,7 +88,7 @@ export const EVENT_TYPE = {
     KEY_UP: 2,
     WHEEL_MOVE: 3,
     MOUSE_MOVE: 4,
-    LOAD_FONT: 5,
+    ADD_FONT: 5,
 }
 
 export class BlockingRaylibJs extends RaylibJsBase {
@@ -139,6 +139,9 @@ export class BlockingRaylibJs extends RaylibJsBase {
             return
         case EVENT_TYPE.STOP:
             this.stop()
+            return
+        case EVENT_TYPE.ADD_FONT:
+            this.platform.addFont(event.data)
             return
         default:
             throw new Error(`Unknown event type: ${event.type}`);

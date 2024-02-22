@@ -311,8 +311,7 @@ export class RaylibJsBase {
         const fileName = cstr_by_ptr(buffer, fileName_ptr);
         // TODO: dynamically generate the name for the font
         // Support more than one custom font
-        const font = new FontFace("myfont", `url(${fileName})`);
-        this.platform.addFont(font, fileName)
+        this.platform.loadFont("myfont", fileName)
     }
 
     GenTextureMipmaps() {}

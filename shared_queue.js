@@ -1,8 +1,14 @@
 export class SharedQueue {
   
-  constructor(typedArray) {
-    this.array = typedArray
-    this.len = typedArray.length
+  constructor(buffer) {
+    this.byteArr = new Uint8Array(buffer)
+    this.uintArr = new Uint32Array(buffer)
+    this.intArr = new Int32Array(buffer)
+    this.floatArr = new Float32Array(buffer)
+    this.encoder = new TextEncoder()
+    this.decoder = new TextDecoder()
+
+    this.len = this.uintArr.length
     this.index = 0
     this.lastIndex = 0
   }
@@ -15,27 +21,38 @@ export class SharedQueue {
     return this.lastIndex = (this.lastIndex + 1) % this.len
   }
 
-  push(element) {
-    this.array[this.nextIndex()] = element
+  pushUint(element) {
+    this.uintArr[this.nextIndex()] = element
   }
 
-  write(array) {
-    const len = array.length
-    if (len >= this.len) {
+  pushInt(element) {
+    this.intArr[this.nextIndex()] = element
+  }
+
+  pushFloat(element) {
+    this.floatArr[this.nextIndex()] = element
+  }
+
+  pushBytes(bytes) {
+    if (this.byteArr.length < bytes.length + 12) { // commit + len + padding
       throw new Error(`Too large`)
     }
-    this.array[this.nextIndex()] = array.length
-    const offset = this.index + 1
-    const diff = this.len - offset
-    if (array.length < diff) {
-      this.array.set(array, offset)
-      // will be less than this.len
-      this.index += array.length
+    this.pushUint(bytes.length)
+    const offset = (this.index + 1) * 4
+    const diff = this.byteArr.length - offset
+    if (bytes.length <= diff) {
+      this.byteArr.set(bytes, offset);
+      this.index += Math.ceil(bytes.length / 4)
     } else {
-      this.array.set(array.subarray(0, diff), offset)
-      this.array.set(array.subarray(diff), 0)
-      this.index = array.length - diff - 1
+      this.byteArr.set(bytes.subarray(0, diff), offset)
+      this.byteArr.set(bytes.subarray(diff), 0)
+      this.index = Math.ceil((bytes.length - diff) / 4) - 1
     }
+  }
+
+  pushString(str) {
+    const encoded = this.encoder.encode(str)
+    this.pushBytes(encoded)
   }
 
   commit() {
@@ -43,28 +60,60 @@ export class SharedQueue {
       return
     }
     this.nextIndex()
-    this.array[this.index] = this.index
-    Atomics.store(this.array, this.lastIndex, this.index)
+    this.uintArr[this.index] = this.index
+    Atomics.store(this.uintArr, this.lastIndex, this.index)
     this.lastIndex = this.index
   }
 
+  get float() {
+    return this.floatArr[this.lastIndex]
+  }
+
+  get int() {
+    return this.intArr[this.lastIndex]
+  }
+
+  get uint() {
+    return this.uintArr[this.lastIndex]
+  }
+
+  get bytes() {
+    const len = this.uintArr[this.lastIndex]
+    const bytes = new Uint8Array(len)
+    const offset = (this.lastIndex + 1) * 4
+    const diff = this.byteArr.length - offset
+    if (len <= diff) {
+      bytes.set(this.byteArr.subarray(offset, offset + len), 0)
+      this.lastIndex += Math.ceil(len / 4)
+    } else {
+      bytes.set(this.byteArr.subarray(offset, offset + diff), 0)
+      bytes.set(this.byteArr.subarray(0, len - diff), diff)
+      this.lastIndex = Math.ceil((len - diff) / 4) - 1
+    }
+    return bytes
+  }
+
+  get string() {
+    return this.decoder.decode(this.bytes)
+  }
+
   pop(handle) {
-    this.index = Atomics.load(this.array, this.lastIndex)
+    this.index = Atomics.load(this.uintArr, this.lastIndex)
     if (this.index === this.lastIndex) {
       return
     }
     while (this.index !== this.nextLastIndex()) {
-      handle(this.array[this.lastIndex])
+      handle(this)
     }
   }
 
   *read() {
-    this.index = Atomics.load(this.array, this.lastIndex)
+    this.index = Atomics.load(this.uintArr, this.lastIndex)
     if (this.index === this.lastIndex) {
       return
     }
     while (this.index !== this.nextLastIndex()) {
-      yield this.array[this.lastIndex]
+      yield this
     }
   }
 
