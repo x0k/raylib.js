@@ -293,8 +293,8 @@ export class RaylibJsWorker {
         }
 
         const eventsBuffer = window.SharedArrayBuffer
-            ? new SharedArrayBuffer(1024)
-            : new ArrayBuffer(1024)
+            ? new SharedArrayBuffer(10 * 1024)
+            : new ArrayBuffer(10 * 1024)
         this.eventsQueue = new EventsQueue(eventsBuffer)
         this.eventsSender = {
             [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
