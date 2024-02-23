@@ -34,6 +34,7 @@ export class SharedQueue {
   }
 
   pushBytes(bytes) {
+    // TODO: push operation should consider the last index (free space)
     if (this.byteArr.length < bytes.length + 12) { // commit + len + padding
       throw new Error(`Too large`)
     }
@@ -60,8 +61,9 @@ export class SharedQueue {
       return
     }
     this.nextIndex()
-    this.uintArr[this.index] = this.index
-    Atomics.store(this.uintArr, this.lastIndex, this.index)
+    this.intArr[this.index] = this.index
+    Atomics.store(this.intArr, this.lastIndex, this.index)
+    Atomics.notify(this.intArr, this.lastIndex)
     this.lastIndex = this.index
   }
 
@@ -97,8 +99,12 @@ export class SharedQueue {
     return this.decoder.decode(this.bytes)
   }
 
+  get blob() {
+    return new Blob([this.bytes])
+  }
+
   pop(handle) {
-    this.index = Atomics.load(this.uintArr, this.lastIndex)
+    this.index = Atomics.load(this.intArr, this.lastIndex)
     if (this.index === this.lastIndex) {
       return
     }
@@ -112,6 +118,15 @@ export class SharedQueue {
     if (this.index === this.lastIndex) {
       return
     }
+    while (this.index !== this.nextLastIndex()) {
+      yield this
+    }
+  }
+
+  *waitAndRead() {
+    Atomics.wait(this.intArr, this.lastIndex, this.index);
+    // index already updated, so this read is safe
+    this.index = this.intArr[this.lastIndex];
     while (this.index !== this.nextLastIndex()) {
       yield this
     }

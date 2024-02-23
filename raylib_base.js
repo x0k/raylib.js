@@ -293,16 +293,9 @@ export class RaylibJsBase {
         const buffer = this.wasm.instance.exports.memory.buffer;
         const [id, width, height, mipmaps, format] = new Uint32Array(buffer, texture_ptr, 5);
         const img = this.images[id];
-        switch (img.status) {
-            case "loaded":
-                // // TODO: implement tinting for DrawTexture
-                // const tint = getColorFromMemory(buffer, color_ptr);
-                this.ctx.drawImage(img.data, posX, posY);
-            case "loading":
-                return;
-            case "error":
-                this.platform.traceLog(LOG_FATAL, `Failed to load image: ${img.error}`);
-        }
+        // // TODO: implement tinting for DrawTexture
+        // const tint = getColorFromMemory(buffer, color_ptr);
+        this.ctx.drawImage(img, posX, posY);
     }
 
     // TODO: codepoints are not implemented

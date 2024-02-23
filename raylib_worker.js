@@ -10,7 +10,6 @@ const REQUEST_MESSAGE_TYPE = {
     KEY_UP: 4,
     WHEEL_MOVE: 5,
     MOUSE_MOVE: 6,
-    ADD_FONT: 7,
 }
 
 const RESPONSE_MESSAGE_TYPE = {
@@ -20,35 +19,20 @@ const RESPONSE_MESSAGE_TYPE = {
     TRACE_LOG: 3,
     RENDER: 4,
     LOAD_FONT: 5,
+    LOAD_IMAGE: 6,
 }
 
-function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
+function makePlatform({
+    self,
+    rendering,
+    renderer,
+    rendererPort,
+    syncLoader,
+}) {
     const renderHandler = {
         [RENDERER.MAIN_THREAD]: self,
         [RENDERER.WORKER_THREAD]: rendererPort,
     }[renderer]
-    const loadFont = {
-        [IMPL.GAME_FRAME]: (family, fileName) => {
-            new FontFace(family, `url(${fileName})`).load().then(
-                f => self.fonts.add(f),
-                console.error,
-            )
-        },
-        [IMPL.BLOCKING]: (family, fileName) => {
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                family,
-                fileName,
-            })
-        },
-        [IMPL.LOCKING]: (family, fileName) => {
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                family,
-                fileName,
-            })
-        },
-    }[impl]
     const render = {
         [RENDERING_CTX.DD]: (ctx) => {
             const data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height)
@@ -90,27 +74,27 @@ function makePlatform({ self, impl, rendering, renderer, rendererPort }) {
                 args,
             })
         },
-        loadFont,
-        addFont(font) {
-            self.fonts.add(new FontFace(font.family, font.buffer))
+        loadFont(family, fileName) {
+            self.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
+                family,
+                fileName,
+            })
+            self.fonts.add(new FontFace(family, syncLoader.readFontBuffer()))
         },
-        loadImage(filename) {
-            const img = {
-                status: "loading",
-                data: undefined,
-                error: undefined
-            }
-            fetch(filename)
-                .then(res => res.blob())
-                .then(blob => createImageBitmap(blob))
-                .then(data => {
-                    img.status = "loaded"
-                    img.data = data
-                }, (error) => {
-                    img.status = "error"
-                    img.error = error
-                })
-            return img
+        loadImage(fileName) {
+            self.postMessage({
+                type: RESPONSE_MESSAGE_TYPE.LOAD_IMAGE,
+                fileName,
+            })
+            const imgData = syncLoader.readImageData()
+            const canvas = new OffscreenCanvas(
+                imgData.width,
+                imgData.height
+            )
+            const ctx = canvas.getContext('2d')
+            ctx.putImageData(imgData, 0, 0)
+            return canvas
         },
         render,
     }
@@ -127,6 +111,7 @@ export function makeWorkerMessagesHandler(self) {
         rendererPort,
         eventsBuffer,
         statusBuffer,
+        syncLoaderBuffer
     }) => {
         if (raylibJs) {
             raylibJs.stop()
@@ -136,10 +121,10 @@ export function makeWorkerMessagesHandler(self) {
             canvas,
             platform: makePlatform({
                 self,
-                impl,
                 rendering,
                 renderer,
                 rendererPort,
+                syncLoader: new SyncLoader(syncLoaderBuffer),
             }),
             rendering,
             eventsQueue: new EventsQueue(eventsBuffer),
@@ -285,24 +270,31 @@ export class RaylibJsWorker {
         this.handlers[RESPONSE_MESSAGE_TYPE.TRACE_LOG] = ({ logLevel, message, args }) => {
             platform.traceLog(logLevel, message, args)
         }
-        /** Blocking platform API */
         this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = () => {}
-        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ family, fileName }) => {
+        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ fileName }) => {
             fetch(fileName).then(r => r.arrayBuffer()).then(
-                (buffer) => this.eventsQueue.push({
-                    type: REQUEST_MESSAGE_TYPE.ADD_FONT,
-                    data: {
-                        family,
-                        buffer,
-                    }
-                }),
+                (buffer) => this.syncLoader.pushFontBuffer(buffer),
                 console.error,
             )
         }
+        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_IMAGE] = ({ fileName }) => {
+            const img = new Image()
+            img.onload = () => {
+                const canvas = document.createElement('canvas')
+                const ctx = canvas.getContext('2d')
+                canvas.width = img.width
+                canvas.height = img.height
+                ctx.drawImage(img, 0, 0)
+                const imgData = ctx.getImageData(0, 0, img.width, img.height)
+                this.syncLoader.pushImageData(imgData)
+            }
+            // TODO: img.onerror
+            img.src = fileName
+        }
 
         const eventsBuffer = window.SharedArrayBuffer
-            ? new SharedArrayBuffer(204800)
-            : new ArrayBuffer(204800)
+            ? new SharedArrayBuffer(1024)
+            : new ArrayBuffer(1024)
         this.eventsQueue = new EventsQueue(eventsBuffer)
         this.eventsSender = {
             [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
@@ -314,6 +306,11 @@ export class RaylibJsWorker {
             ? new SharedArrayBuffer(4)
             : new ArrayBuffer(4)
         this.status = new Int32Array(statusBuffer)
+
+        const syncLoaderBuffer = window.SharedArrayBuffer
+            ? new SharedArrayBuffer(640 * 1024)
+            : new ArrayBuffer(640 * 1024)
+        this.syncLoader = new SyncLoader(syncLoaderBuffer)
 
         const channel = new MessageChannel()
         // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
@@ -362,6 +359,7 @@ export class RaylibJsWorker {
             canvas: offscreen,
             eventsBuffer,
             statusBuffer,
+            syncLoaderBuffer,
             rendering,
             impl,
             renderer,
@@ -463,7 +461,6 @@ const MESSAGE_TYPE_TO_EVENT_TYPE = {
     [REQUEST_MESSAGE_TYPE.WHEEL_MOVE]: EVENT_TYPE.WHEEL_MOVE,
     [REQUEST_MESSAGE_TYPE.MOUSE_MOVE]: EVENT_TYPE.MOUSE_MOVE,
     [REQUEST_MESSAGE_TYPE.STOP]: EVENT_TYPE.STOP,
-    [REQUEST_MESSAGE_TYPE.ADD_FONT]: EVENT_TYPE.ADD_FONT,
 }
 
 class EventsQueue {
@@ -477,11 +474,6 @@ class EventsQueue {
     case REQUEST_MESSAGE_TYPE.MOUSE_MOVE: {
         this.queue.pushFloat(data.x)
         this.queue.pushFloat(data.y)
-        return
-    }
-    case REQUEST_MESSAGE_TYPE.ADD_FONT: {
-        this.queue.pushString(data.family)
-        this.queue.pushBytes(new Uint8Array(data.buffer))
         return
     }
     default:
@@ -508,18 +500,42 @@ class EventsQueue {
                 }
             })
             break
-        case EVENT_TYPE.ADD_FONT:
-            handler({
-                type,
-                data: {
-                    family: gen.next().value.string,
-                    buffer: gen.next().value.bytes.buffer
-                }
-            })
-            break
         default:
             handler({ type, data: gen.next().value.int })
         }
     }
   }
+}
+
+class SyncLoader {
+    constructor(sharedMemoryBuffer) {
+        this.queue = new SharedQueue(sharedMemoryBuffer)
+    }
+
+    pushFontBuffer(fontBuffer) {
+        this.queue.pushBytes(new Uint8Array(fontBuffer))
+        this.queue.commit()
+    }
+
+    readFontBuffer() {
+        const g = this.queue.waitAndRead()
+        return g.next().value.bytes.buffer
+    }
+
+    pushImageData(imgData) {
+        this.queue.pushUint(imgData.width)
+        this.queue.pushUint(imgData.height)
+        this.queue.pushBytes(imgData.data)
+        this.queue.commit()
+    }
+
+    readImageData() {
+        const g = this.queue.waitAndRead()
+        const w = g.next().value.uint
+        const h = g.next().value.uint
+        const imgData = new ImageData(w, h)
+        imgData.data.set(g.next().value.bytes)
+        return imgData
+    }
+
 }

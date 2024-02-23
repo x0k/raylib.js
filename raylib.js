@@ -36,7 +36,7 @@ export function makePlatform({ canvas }) {
         loadImage(filename) {
             var img = new Image();
             img.src = filename;
-            return { status: "loaded", data: img }
+            return img
         },
         /** Blocking platform API */
         render() {
@@ -88,7 +88,6 @@ export const EVENT_TYPE = {
     KEY_UP: 2,
     WHEEL_MOVE: 3,
     MOUSE_MOVE: 4,
-    ADD_FONT: 5,
 }
 
 export class BlockingRaylibJs extends RaylibJsBase {
@@ -139,9 +138,6 @@ export class BlockingRaylibJs extends RaylibJsBase {
             return
         case EVENT_TYPE.STOP:
             this.stop()
-            return
-        case EVENT_TYPE.ADD_FONT:
-            this.platform.addFont(event.data)
             return
         default:
             throw new Error(`Unknown event type: ${event.type}`);
