@@ -191,13 +191,13 @@
             const queryParams = new URLSearchParams(window.location.search);
             for (const { name, isValid, selector, defaultValue } of params) {
                 const value = queryParams.get(name);
-                const newValue = isValid(value) ? value : defaultValue
-                queryParams.set(name, newValue);
-                selector.value = newValue
+                selector.value = isValid(value) ? value : defaultValue
             }
-            history.replaceState(null, null, "?"+queryParams.toString());
             return () => {
-                for (let { name, selector } of params) {
+                for (const { name, selector, when, defaultValue } of params) {
+                    if (selector.disabled = (when && !when(Object.fromEntries(queryParams)))) {
+                        selector.value = defaultValue
+                    }
                     queryParams.set(name, selector.value);
                 }
                 history.pushState(null, null, "?"+queryParams.toString());
@@ -300,19 +300,22 @@
                 name: "impl",
                 selector: raylibImplSelect,
                 defaultValue: defaultImpl,
-                isValid: (value) => value in impls
+                isValid: (value) => value in impls,
+                when: ({ env }) => env === "worker",
             },
             {
                 name: "ctx",
                 selector: raylibCtxSelect,
                 defaultValue: defaultCtx,
-                isValid: (value) => value in ctxs
+                isValid: (value) => value in ctxs,
+                when: ({ impl }) => impl !== IMPL.GAME_FRAME
             },
             {
                 name: "rnd",
                 selector: raylibRendererSelect,
                 defaultValue: defaultRenderer,
-                isValid: (value) => value in renderers
+                isValid: (value) => value in renderers,
+                when: ({ impl }) => impl !== IMPL.GAME_FRAME
             }
         )
         const showWarning = makeWarningShower(
