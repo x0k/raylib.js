@@ -57,6 +57,12 @@ Example examples[] = {
         .wasm_path  = "./wasm/text_writing_anim.wasm",
         .native_wasm_path = "./wasm/text_writing_anim.native.wasm"
     },
+    {
+        .src_path   = "./examples/textures_logo_raylib.c",
+        .bin_path   = "./build/textures_logo_raylib",
+        .wasm_path  = "./wasm/textures_logo_raylib.wasm",
+        .native_wasm_path = "./wasm/textures_logo_raylib.native.wasm"
+    },
 };
 
 bool build_native(void)
