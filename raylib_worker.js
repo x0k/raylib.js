@@ -75,19 +75,11 @@ function makePlatform({
             })
         },
         loadFont(family, fileName) {
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                family,
-                fileName,
-            })
-            self.fonts.add(new FontFace(family, syncLoader.readFontBuffer()))
+            const data = syncLoader.loadFontBuffer(fileName)
+            self.fonts.add(new FontFace(family, data))
         },
         loadImage(fileName) {
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.LOAD_IMAGE,
-                fileName,
-            })
-            const imgData = syncLoader.readImageData()
+            const imgData = syncLoader.loadImageData(fileName)
             const canvas = new OffscreenCanvas(
                 imgData.width,
                 imgData.height
@@ -124,7 +116,16 @@ export function makeWorkerMessagesHandler(self) {
                 rendering,
                 renderer,
                 rendererPort,
-                syncLoader: new SyncLoader(syncLoaderBuffer),
+                syncLoader: new SyncLoader(syncLoaderBuffer, {
+                    loadFontBuffer: (fileName) => self.postMessage({
+                        type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
+                        fileName,
+                    }),
+                    loadImageData: (fileName) => self.postMessage({
+                        type: RESPONSE_MESSAGE_TYPE.LOAD_IMAGE,
+                        fileName,
+                    }),
+                }),
             }),
             rendering,
             eventsQueue: new EventsQueue(eventsBuffer),
@@ -508,8 +509,9 @@ class EventsQueue {
 }
 
 class SyncLoader {
-    constructor(sharedMemoryBuffer) {
+    constructor(sharedMemoryBuffer, loader) {
         this.queue = new SharedQueue(sharedMemoryBuffer)
+        this.loader = loader
     }
 
     pushFontBuffer(fontBuffer) {
@@ -517,7 +519,8 @@ class SyncLoader {
         this.queue.commit()
     }
 
-    readFontBuffer() {
+    loadFontBuffer(fileName) {
+        this.loader.loadFontBuffer(fileName)
         const g = this.queue.waitAndRead()
         return g.next().value.bytes.buffer
     }
@@ -529,7 +532,8 @@ class SyncLoader {
         this.queue.commit()
     }
 
-    readImageData() {
+    loadImageData(fileName) {
+        this.loader.loadImageData(fileName)
         const g = this.queue.waitAndRead()
         const w = g.next().value.uint
         const h = g.next().value.uint
