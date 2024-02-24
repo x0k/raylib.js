@@ -34,7 +34,7 @@ export class SharedQueue {
   }
 
   pushBytes(bytes) {
-    // TODO: push operation should consider the last index (free space)
+    // TODO: push operations should consider the last index (free space)
     if (this.byteArr.length < bytes.length + 12) { // commit + len + padding
       throw new Error(`Too large`)
     }
@@ -123,9 +123,16 @@ export class SharedQueue {
     }
   }
 
+  waitAndPop(handler) {
+    Atomics.wait(this.intArr, this.lastIndex, this.index);
+    this.index = this.intArr[this.lastIndex];
+    while (this.index !== this.nextLastIndex()) {
+      handler(this)
+    }
+  }
+
   *waitAndRead() {
     Atomics.wait(this.intArr, this.lastIndex, this.index);
-    // index already updated, so this read is safe
     this.index = this.intArr[this.lastIndex];
     while (this.index !== this.nextLastIndex()) {
       yield this

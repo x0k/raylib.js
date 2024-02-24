@@ -11,48 +11,10 @@ function make_environment(env) {
     });
 }
 
-function cstrlen(mem, ptr) {
-    let len = 0;
-    while (mem[ptr] != 0) {
-        len++;
-        ptr++;
-    }
-    return len;
-}
-
-function cstr_by_ptr(mem_buffer, ptr) {
-    const mem = new Uint8Array(mem_buffer);
-    const len = cstrlen(mem, ptr);
-    const bytes = new Uint8Array(mem_buffer, ptr, len);
-    return new TextDecoder().decode(bytes);
-}
-
-function color_hex_unpacked(r, g, b, a) {
-    r = r.toString(16).padStart(2, '0');
-    g = g.toString(16).padStart(2, '0');
-    b = b.toString(16).padStart(2, '0');
-    a = a.toString(16).padStart(2, '0');
-    return "#"+r+g+b+a;
-}
-
-function color_hex(color) {
-    const r = ((color>>(0*8))&0xFF).toString(16).padStart(2, '0');
-    const g = ((color>>(1*8))&0xFF).toString(16).padStart(2, '0');
-    const b = ((color>>(2*8))&0xFF).toString(16).padStart(2, '0');
-    const a = ((color>>(3*8))&0xFF).toString(16).padStart(2, '0');
-    return "#"+r+g+b+a;
-}
-
-function getColorFromMemory(buffer, color_ptr) {
-    const [r, g, b, a] = new Uint8Array(buffer, color_ptr, 4);
-    return color_hex_unpacked(r, g, b, a);
-}
-
 let iota = 0
 export const STATE = {
     STOPPED: iota++,
     STARTING: iota++,
-    FAILED: iota++,
     STARTED: iota++,
 }
 
@@ -103,34 +65,31 @@ export class RaylibJsBase {
         this.currentMouseWheelMoveState = direction
     }
 
-    onMouseMove({ position }) {
-        this.currentMousePosition = position
+    onMouseMove({ x, y }) {
+        this.currentMousePosition.x = x
+        this.currentMousePosition.y = y
     }
 
     onStart({ wasmPath }) {
-        this.state = STATE.STARTING
         WebAssembly.instantiateStreaming(fetch(wasmPath), {
             env: make_environment(this)
         }).then(
-            (wasm) => this.dispatch({ type: EVENT_TYPE.STARTED, wasm }),
-            (error) => this.dispatch({ type: EVENT_TYPE.FAILED, error }),
+            (wasm) => this.send({ type: EVENT_TYPE.STARTED, wasm }),
+            (error) => this.send({ type: EVENT_TYPE.FAILED, error }),
         )
     }
 
     onStarted({ wasm }) {
-        this.state = STATE.STARTED
         this.wasm = wasm
         this.wasm.instance.exports.main();
     }
 
     onFailed({ error }) {
-       this.state = STATE.FAILED
        this.platform.traceLog(LOG_ERROR, "Failed to start", error)
-       this.dispatch({ type: EVENT_TYPE.STOP })
+       this.onStop()
     }
     
     onStop() {
-        this.state = STATE.STOPPED
         this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
         this.#reset()
     }
@@ -138,37 +97,76 @@ export class RaylibJsBase {
     constructor(ctx, platform) {
         this.ctx = ctx
         this.platform = platform
+        this.subscribers = new Set()
         this.#reset();
         this.state = STATE.STOPPED
-        this.handlers = {
+        const onStop = {
+            target: STATE.STOPPED,
+            action: this.onStop.bind(this),
+        }
+        this.config = {
             [STATE.STOPPED]: {
-                [EVENT_TYPE.START]: this.onStart.bind(this),
+                [EVENT_TYPE.START]: {
+                    target: STATE.STARTING,
+                    action: this.onStart.bind(this),
+                },
             },
             [STATE.STARTING]: {
-                [EVENT_TYPE.STARTED]: this.onStarted.bind(this),
-                [EVENT_TYPE.FAILED]: this.onFailed.bind(this),
-                [EVENT_TYPE.STOP]: this.onStop.bind(this),
-            },
-            [STATE.FAILED]: {
-                [EVENT_TYPE.STOP]: this.onStop.bind(this),
+                [EVENT_TYPE.STARTED]: {
+                    target: STATE.STARTED,
+                    action: this.onStarted.bind(this),
+                },
+                [EVENT_TYPE.FAILED]: {
+                    target: STATE.STOPPED,
+                    action: this.onFailed.bind(this),
+                },
+                [EVENT_TYPE.STOP]: onStop,
             },
             [STATE.STARTED]: {
-                [EVENT_TYPE.STOP]: this.onStop.bind(this),
-                [EVENT_TYPE.KEY_UP]: this.onKeyUp.bind(this),
-                [EVENT_TYPE.KEY_DOWN]: this.onKeyDown.bind(this),
-                [EVENT_TYPE.WHEEL_MOVE]: this.onWheelMove.bind(this),
-                [EVENT_TYPE.MOUSE_MOVE]: this.onMouseMove.bind(this),
+                [EVENT_TYPE.STOP]: onStop,
+                [EVENT_TYPE.KEY_UP]: {
+                    action: this.onKeyUp.bind(this),
+                },
+                [EVENT_TYPE.KEY_DOWN]: {
+                    action: this.onKeyDown.bind(this),
+                },
+                [EVENT_TYPE.WHEEL_MOVE]: {
+                    action: this.onWheelMove.bind(this),
+                },
+                [EVENT_TYPE.MOUSE_MOVE]: {
+                    action: this.onMouseMove.bind(this),
+                },
             }
         }
     }
 
-    dispatch(event) {
-        this.handlers[this.state][event.type]?.(event)
+    send(event) {
+        const transition = this.config[this.state][event.type]
+        if (transition === undefined) {
+            return
+        }
+        transition?.action(event)
+        if (transition.target === undefined) {
+            return
+        }
+        this.state = transition.target
+        for (const handler of this.subscribers) {
+            handler(this.state)
+        }
+    }
+
+    subscribe(onTransition) {
+        this.subscribers.add(onTransition)
+        return () => {
+            this.subscribers.delete(onTransition)
+        }
     }
 
     InitWindow(width, height, title_ptr) {
         const buffer = this.wasm.instance.exports.memory.buffer;
         this.platform.updateWindow(cstr_by_ptr(buffer, title_ptr), width, height);
+        this.ctx.canvas.width = width;
+        this.ctx.canvas.height = height;
     }
 
     WindowShouldClose() {
@@ -434,7 +432,7 @@ const LOG_ERROR   = iota++; // Error logging, used on unrecoverable failures
 const LOG_FATAL   = iota++; // Fatal logging, used to abort program: exit(EXIT_FAILURE)
 const LOG_NONE    = iota++; // Disable logging
 
-export function makePlatform({ canvas, syncLoader }) {
+export function makePlatform({ canvas }) {
     return {
         updateWindow(title, width, height) {
             document.title = title
@@ -453,10 +451,7 @@ export function makePlatform({ canvas, syncLoader }) {
             case LOG_NONE:    console.log(`NONE: ${text} ${args}`);    break;
             }
         },
-        loadFont: syncLoader ? (family, fileName) => {
-            const data = syncLoader.loadFontBuffer(fileName)
-            document.fonts.add(new FontFace(family, data))
-        } : (family, fileName) => {
+        loadFont: (family, fileName) => {
             new FontFace(family, `url(${fileName})`).load().then(
                 f => document.fonts.add(f),
                 console.error,
@@ -592,4 +587,41 @@ export const glfwKeyMapping = {
     "MetaRight":      347,
     "ContextMenu":    348,
     //  GLFW_KEY_LAST   GLFW_KEY_MENU
+}
+
+function cstrlen(mem, ptr) {
+    let len = 0;
+    while (mem[ptr] != 0) {
+        len++;
+        ptr++;
+    }
+    return len;
+}
+
+function cstr_by_ptr(mem_buffer, ptr) {
+    const mem = new Uint8Array(mem_buffer);
+    const len = cstrlen(mem, ptr);
+    const bytes = new Uint8Array(mem_buffer, ptr, len);
+    return new TextDecoder().decode(bytes);
+}
+
+function color_hex_unpacked(r, g, b, a) {
+    r = r.toString(16).padStart(2, '0');
+    g = g.toString(16).padStart(2, '0');
+    b = b.toString(16).padStart(2, '0');
+    a = a.toString(16).padStart(2, '0');
+    return "#"+r+g+b+a;
+}
+
+function color_hex(color) {
+    const r = ((color>>(0*8))&0xFF).toString(16).padStart(2, '0');
+    const g = ((color>>(1*8))&0xFF).toString(16).padStart(2, '0');
+    const b = ((color>>(2*8))&0xFF).toString(16).padStart(2, '0');
+    const a = ((color>>(3*8))&0xFF).toString(16).padStart(2, '0');
+    return "#"+r+g+b+a;
+}
+
+function getColorFromMemory(buffer, color_ptr) {
+    const [r, g, b, a] = new Uint8Array(buffer, color_ptr, 4);
+    return color_hex_unpacked(r, g, b, a);
 }

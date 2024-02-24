@@ -81,8 +81,8 @@
     <select id="raylib-impl-select" class="raylib-select" onchange="run()">
         <!-- This is populated by js -->
     </select>
-    <label for="raylib-ctx-select">Rendering:</label>
-    <select id="raylib-ctx-select" class="raylib-select" onchange="run()">
+    <label for="raylib-mth-select">Rendering method:</label>
+    <select id="raylib-mth-select" class="raylib-select" onchange="run()">
         <!-- This is populated by js -->
     </select>
     <label for="raylib-rnd-select">Renderer:</label>
@@ -91,26 +91,30 @@
     </select>
     <canvas id="game"></canvas>
     <script type="module">
-        import { RaylibJs, makePlatform, glfwKeyMapping } from "./raylib.js"
-        import { IMPL, RENDERING_CTX } from "./raylib_factory.js"
+        import { EVENT_TYPE, STATE, RaylibJs, makePlatform, glfwKeyMapping } from "./raylib.js"
+        import { IMPL, RENDERING_METHOD } from "./raylib_factory.js"
         import { RaylibJsWorker, RENDERER } from "./raylib_worker.js"
 
         function addEventListeners (raylibJs, canvas) {
-            const keyDown = (e) => {
-                raylibJs.handleKeyDown(glfwKeyMapping[e.code]);
-            };
-            const keyUp = (e) => {
-                raylibJs.handleKeyUp(glfwKeyMapping[e.code]);
-            };
-            const wheelMove = (e) => {
-                raylibJs.handleWheelMove(Math.sign(-e.deltaY));
-            };
+            const keyDown = (e) => raylibJs.send({
+                type: EVENT_TYPE.KEY_DOWN,
+                keyCode: glfwKeyMapping[e.code],
+            })
+            const keyUp = (e) => raylibJs.send({
+                type: EVENT_TYPE.KEY_UP,
+                keyCode: glfwKeyMapping[e.code]
+            })
+            const wheelMove = (e) => raylibJs.send({
+                type: EVENT_TYPE.WHEEL_MOVE,
+                direction: Math.sign(-e.deltaY),
+            })
             const mouseMove = (e) => {
                 const rect = canvas.getBoundingClientRect();
-                raylibJs.handleMouseMove({
+                raylibJs.send({
+                    type: EVENT_TYPE.MOUSE_MOVE,
                     x: e.clientX - rect.left,
                     y: e.clientY - rect.top,
-                });
+                })
             };
 
             window.addEventListener("keydown", keyDown);
@@ -129,7 +133,7 @@
             exampleSelector,
             envSelector,
             implSelector,
-            ctxSelector,
+            mthSelector,
             rendererSelector,
             canvas,
             worker,
@@ -158,11 +162,27 @@
                 "worker": pathFactory
             }
             let oldCanvas = canvas
-            return () => {
-                if (raylibJs) {
-                    raylibJs.stop()
-                    removeEventListeners()
+            const stop = () => {
+                if (raylibJs === undefined) {
+                    return Promise.resolve()
                 }
+                const promise = new Promise((res) => {
+                    const unsub = raylibJs.subscribe((state) => {
+                        if (state === STATE.STOPPED) {
+                            removeEventListeners()
+                            unsub()
+                            if (raylibJs instanceof RaylibJsWorker) {
+                                raylibJs.destroy()
+                            }
+                            res()
+                        }
+                    })
+                })
+                raylibJs.send({ type: EVENT_TYPE.STOP })
+                return promise
+            }
+            return async () => {
+                await stop()
                 const newCanvas = document.createElement("canvas")
                 newCanvas.id = oldCanvas.id
                 oldCanvas.replaceWith(newCanvas)
@@ -170,18 +190,19 @@
                 const impl = implSelector.value
                 const env = envSelector.value
                 raylibJs = factories[env]({
+                    impl,
                     canvas: newCanvas,
                     platform: makePlatform({
                         canvas: newCanvas
                     }),
-                    worker,
-                    impl,
-                    rendering: ctxSelector.value,
+                    rendering: mthSelector.value,
                     renderer: rendererSelector.value,
+                    worker,
                     rendererWorker,
                 })
                 removeEventListeners = addEventListeners(raylibJs, newCanvas)
-                raylibJs.start({
+                raylibJs.send({
+                    type: EVENT_TYPE.START,
                     wasmPath: envPathFactories[env](impl, exampleSelector.value),
                 })
             }
@@ -249,14 +270,14 @@
             raylibImplSelect.innerHTML += `<option value="${impl}">${impls[impl]}</option>`
         }
 
-        const ctxs = {
-            [RENDERING_CTX.DD]: "putImageData",
-            [RENDERING_CTX.BITMAP]: "transferFromImageBitmap",
+        const methods = {
+            [RENDERING_METHOD.DD]: "putImageData",
+            [RENDERING_METHOD.BITMAP]: "transferFromImageBitmap",
         }
-        const defaultCtx = RENDERING_CTX.DD
-        const raylibCtxSelect = document.getElementById("raylib-ctx-select");
-        for (const ctx in ctxs) {
-            raylibCtxSelect.innerHTML += `<option value="${ctx}">${ctxs[ctx]}</option>`
+        const defaultMth = RENDERING_METHOD.DD
+        const raylibMthSelect = document.getElementById("raylib-mth-select");
+        for (const mth in methods) {
+            raylibMthSelect.innerHTML += `<option value="${mth}">${methods[mth]}</option>`
         }
 
         const renderers = {
@@ -273,7 +294,7 @@
             exampleSelector: raylibExampleSelect,
             envSelector: raylibEnvSelect,
             implSelector: raylibImplSelect,
-            ctxSelector: raylibCtxSelect,
+            mthSelector: raylibMthSelect,
             rendererSelector: raylibRendererSelect,
             canvas: document.getElementById("game"),
             worker: new Worker("raylib.worker.js", {
@@ -304,10 +325,10 @@
                 when: ({ env }) => env === "worker",
             },
             {
-                name: "ctx",
-                selector: raylibCtxSelect,
-                defaultValue: defaultCtx,
-                isValid: (value) => value in ctxs,
+                name: "mth",
+                selector: raylibMthSelect,
+                defaultValue: defaultMth,
+                isValid: (value) => value in methods,
                 when: ({ impl }) => impl !== IMPL.GAME_FRAME
             },
             {

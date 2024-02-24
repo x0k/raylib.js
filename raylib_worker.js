@@ -1,511 +1,15 @@
 import { SharedQueue } from './shared_queue.js'
-import { EVENT_TYPE } from './raylib.js'
-import { createRaylib, IMPL, RENDERING_CTX } from './raylib_factory.js'
-
-const REQUEST_MESSAGE_TYPE = {
-    INIT: 0,
-    START: 1,
-    STOP: 2,
-    KEY_DOWN: 3,
-    KEY_UP: 4,
-    WHEEL_MOVE: 5,
-    MOUSE_MOVE: 6,
-}
-
-const RESPONSE_MESSAGE_TYPE = {
-    START_SUCCESS: 0,
-    START_FAIL: 1,
-    UPDATE_WINDOW: 2,
-    TRACE_LOG: 3,
-    RENDER: 4,
-    LOAD_FONT: 5,
-    LOAD_IMAGE: 6,
-}
-
-function makePlatform({
-    self,
-    rendering,
-    renderer,
-    rendererPort,
-    syncLoader,
-}) {
-    const renderHandler = {
-        [RENDERER.MAIN_THREAD]: self,
-        [RENDERER.WORKER_THREAD]: rendererPort,
-    }[renderer]
-    const render = {
-        [RENDERING_CTX.DD]: (ctx) => {
-            const data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height)
-            renderHandler.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.RENDER,
-                data,
-            }, [data.data.buffer])
-        },
-        [RENDERING_CTX.BITMAP]: (ctx) => {
-            const data = ctx.canvas.transferToImageBitmap()
-            renderHandler.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.RENDER,
-                data,
-            // TODO: Find out why transferring a ImageBitmap leads to memory leaks 
-            }) //, [data])
-            data.close()
-        },
-    }[rendering]
-    return {
-        updateWindow(title, width, height) {
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW,
-                title,
-                width,
-                height,
-            })
-            rendererPort.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW,
-                title,
-                width,
-                height,
-            })
-        },
-        traceLog(logLevel, message, args) {
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.TRACE_LOG,
-                logLevel,
-                message,
-                args,
-            })
-        },
-        loadFont(family, fileName) {
-            const data = syncLoader.loadFontBuffer(fileName)
-            self.fonts.add(new FontFace(family, data))
-        },
-        loadImage(fileName) {
-            const imgData = syncLoader.loadImageData(fileName)
-            const canvas = new OffscreenCanvas(
-                imgData.width,
-                imgData.height
-            )
-            const ctx = canvas.getContext('2d')
-            ctx.putImageData(imgData, 0, 0)
-            return canvas
-        },
-        render,
-    }
-}
-
-export function makeWorkerMessagesHandler(self) {
-    let raylibJs = undefined
-    const handlers = new Array(Object.keys(REQUEST_MESSAGE_TYPE).length)
-    handlers[REQUEST_MESSAGE_TYPE.INIT] = ({
-        canvas,
-        impl,
-        rendering,
-        renderer,
-        rendererPort,
-        eventsBuffer,
-        statusBuffer,
-        syncLoaderBuffer
-    }) => {
-        if (raylibJs) {
-            raylibJs.stop()
-        }
-        raylibJs = createRaylib({
-            impl,
-            canvas,
-            platform: makePlatform({
-                self,
-                rendering,
-                renderer,
-                rendererPort,
-                syncLoader: new SyncLoader(syncLoaderBuffer, {
-                    loadFontBuffer: (fileName) => self.postMessage({
-                        type: RESPONSE_MESSAGE_TYPE.LOAD_FONT,
-                        fileName,
-                    }),
-                    loadImageData: (fileName) => self.postMessage({
-                        type: RESPONSE_MESSAGE_TYPE.LOAD_IMAGE,
-                        fileName,
-                    }),
-                }),
-            }),
-            rendering,
-            eventsQueue: new EventsQueue(eventsBuffer),
-            statusBuffer,
-        })
-    }
-    handlers[REQUEST_MESSAGE_TYPE.START] = async ({ params }) => {
-        try {
-            await self.fonts.ready
-            await raylibJs.start(params)
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.START_SUCCESS
-            })
-        } catch (error) {
-            console.log(error)
-            self.postMessage({
-                type: RESPONSE_MESSAGE_TYPE.START_FAIL,
-                reason: String(error)
-            })
-        }
-    }
-    handlers[REQUEST_MESSAGE_TYPE.STOP] = () => {
-        raylibJs.stop()
-    }
-    handlers[REQUEST_MESSAGE_TYPE.KEY_DOWN] = ({ data }) => {
-        raylibJs.handleKeyDown(data)
-    }
-    handlers[REQUEST_MESSAGE_TYPE.KEY_UP] = ({ data }) => {
-        raylibJs.handleKeyUp(data)
-    }
-    handlers[REQUEST_MESSAGE_TYPE.WHEEL_MOVE] = ({ data }) => {
-        raylibJs.handleWheelMove(data)
-    }
-    handlers[REQUEST_MESSAGE_TYPE.MOUSE_MOVE] = ({ data }) => {
-        raylibJs.handleMouseMove(data)
-    }
-    return (event) => {
-        if (handlers[event.data.type]) {
-            handlers[event.data.type](event.data)
-        } else {
-            console.error("Unhandled message", event)
-        }
-    }
-}
-
-const RENDERING_TO_CONTEXT = {
-    [RENDERING_CTX.DD]: "2d",
-    [RENDERING_CTX.BITMAP]: "bitmaprenderer",
-}
-
-function makeRenderHandlerFactories(canvas, rendering) {
-    const ctx = canvas.getContext(RENDERING_TO_CONTEXT[rendering])
-    return {
-        [RENDERING_CTX.DD]: ({ data }) => {
-            ctx.putImageData(data, 0, 0)
-        },
-        [RENDERING_CTX.BITMAP]: ({ data }) => {
-            ctx.transferFromImageBitmap(data)
-        },
-    }[rendering]
-}
-
-export function makeRendererMessagesHandler(self) {
-    let port = undefined
-    return (event) => {
-        switch (event.data.type) {
-        case REQUEST_MESSAGE_TYPE.INIT: {
-            const { canvas, rendering, sourcePort } = event.data
-            const render = makeRenderHandlerFactories(canvas, rendering)
-            port = sourcePort
-            port.onmessage = (event) => {
-                switch (event.data.type) {
-                case RESPONSE_MESSAGE_TYPE.RENDER:
-                    render(event.data)
-                    break
-                case RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW:
-                    canvas.width = event.data.width
-                    canvas.height = event.data.height
-                    break
-                default:
-                    console.error("Unhandled message", event)
-                }
-            }
-            return
-        }
-        case REQUEST_MESSAGE_TYPE.STOP:
-            if (port) {
-                port.onmessage = null
-                port = undefined
-            }
-            return
-        }
-    }
-}
+import {
+    STATE,
+    EVENT_TYPE,
+    IMPL,
+    RENDERING_METHOD,
+    createRaylib
+} from './raylib_factory.js'
 
 export const RENDERER = {
     MAIN_THREAD: "main",
     WORKER_THREAD: "worker",
-}
-
-export class RaylibJsWorker {
-
-    handleMessage = (event) => {
-        if (this.handlers[event.data.type]) {
-            this.handlers[event.data.type](event.data)
-        } else {
-            console.error("Unhandled message", event)
-        }
-    }
-
-    constructor({
-        worker,
-        canvas,
-        platform,
-        impl,
-        rendering,
-        renderer,
-        rendererWorker,
-    }) {
-        this.worker = worker
-        this.rendererWorker = rendererWorker
-        // For manage event commits
-        this.impl = impl
-        this.animationFrameId = undefined
-        this.startPromise = undefined
-        this.onStartSuccess = undefined
-        this.onStartFail = undefined
-
-        this.handlers = new Array(Object.keys(RESPONSE_MESSAGE_TYPE).length)
-        this.handlers[RESPONSE_MESSAGE_TYPE.START_SUCCESS] = () => {
-            if (this.onStartSuccess) {
-                this.onStartSuccess()
-            }
-        }
-        this.handlers[RESPONSE_MESSAGE_TYPE.START_FAIL] = ({ reason }) => {
-            if (this.onStartFail) {
-                this.onStartFail(new Error(reason))
-            }
-        }
-        this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
-            platform.updateWindow(title, width, height)
-        }
-        this.handlers[RESPONSE_MESSAGE_TYPE.TRACE_LOG] = ({ logLevel, message, args }) => {
-            platform.traceLog(logLevel, message, args)
-        }
-        this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] = () => {}
-        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_FONT] = ({ fileName }) => {
-            fetch(fileName).then(r => r.arrayBuffer()).then(
-                (buffer) => this.syncLoader.pushFontBuffer(buffer),
-                console.error,
-            )
-        }
-        this.handlers[RESPONSE_MESSAGE_TYPE.LOAD_IMAGE] = ({ fileName }) => {
-            const img = new Image()
-            img.onload = () => {
-                const canvas = document.createElement('canvas')
-                const ctx = canvas.getContext('2d')
-                canvas.width = img.width
-                canvas.height = img.height
-                ctx.drawImage(img, 0, 0)
-                const imgData = ctx.getImageData(0, 0, img.width, img.height)
-                this.syncLoader.pushImageData(imgData)
-            }
-            // TODO: img.onerror
-            img.src = fileName
-        }
-
-        const eventsBuffer = window.SharedArrayBuffer
-            ? new SharedArrayBuffer(10 * 1024)
-            : new ArrayBuffer(10 * 1024)
-        this.eventsQueue = new EventsQueue(eventsBuffer)
-        this.eventsSender = {
-            [IMPL.GAME_FRAME]: (event) => this.worker.postMessage(event),
-            [IMPL.BLOCKING]: (event) => this.eventsQueue.push(event),
-            [IMPL.LOCKING]: (event) => this.eventsQueue.push(event),
-        }[impl]
-
-        const statusBuffer = window.SharedArrayBuffer
-            ? new SharedArrayBuffer(4)
-            : new ArrayBuffer(4)
-        this.status = new Int32Array(statusBuffer)
-
-        const syncLoaderBuffer = window.SharedArrayBuffer
-            ? new SharedArrayBuffer(640 * 1024)
-            : new ArrayBuffer(640 * 1024)
-        this.syncLoader = new SyncLoader(syncLoaderBuffer)
-
-        const channel = new MessageChannel()
-        // https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
-        let offscreen = undefined
-        switch (impl) {
-        case IMPL.GAME_FRAME: {
-            offscreen = canvas.transferControlToOffscreen()
-            break
-        }
-        case IMPL.LOCKING:
-        case IMPL.BLOCKING: {
-            switch (renderer) {
-                case RENDERER.MAIN_THREAD: {
-                    this.handlers[RESPONSE_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title, width, height }) => {
-                        platform.updateWindow(title, width, height)
-                        canvas.width = width
-                        canvas.height = height
-                    }
-                    this.handlers[RESPONSE_MESSAGE_TYPE.RENDER] =
-                        makeRenderHandlerFactories(canvas, rendering)
-                    break
-                }
-                case RENDERER.WORKER_THREAD: {
-                    const offscreen = canvas.transferControlToOffscreen()
-                    this.rendererWorker.postMessage({
-                        type: REQUEST_MESSAGE_TYPE.INIT,
-                        canvas: offscreen,
-                        rendering,
-                        sourcePort: channel.port1
-                    }, [offscreen, channel.port1])
-                    break
-                }
-                default:
-                    throw new Error(`Unknown renderer: ${renderer}`)
-                }
-                // Fake canvas to measure the text in worker thread
-                offscreen = new OffscreenCanvas(800, 600)
-                break
-        }
-        default:
-            throw new Error(`Unknown impl: ${impl}`)
-        }
-        this.worker.addEventListener("message", this.handleMessage)
-        this.worker.postMessage({
-            type: REQUEST_MESSAGE_TYPE.INIT,
-            canvas: offscreen,
-            eventsBuffer,
-            statusBuffer,
-            syncLoaderBuffer,
-            rendering,
-            impl,
-            renderer,
-            rendererPort: channel.port2,
-        }, [offscreen, channel.port2])
-    }
-
-    async start(params) {
-        if (this.startPromise) {
-            return this.startPromise
-        }
-        this.startPromise = new Promise((resolve, reject) => {
-            this.onStartSuccess = resolve
-            this.onStartFail = reject
-        }).then(() => {
-            this.startPromise = undefined
-            this.onStartSuccess = undefined
-            this.onStartFail = undefined
-        })
-        this.worker.postMessage({
-            type: REQUEST_MESSAGE_TYPE.START,
-            params
-        })
-        switch (this.impl) {
-        case IMPL.BLOCKING: {
-            const commitEvents = () => {
-                this.eventsQueue.commit()
-                this.animationFrameId = requestAnimationFrame(commitEvents)
-            }
-            this.animationFrameId = requestAnimationFrame(commitEvents)
-            break
-        }
-        case IMPL.LOCKING: {
-            const commitEvents = () => {
-                this.eventsQueue.commit()
-                Atomics.notify(this.status, 0)
-                this.animationFrameId = requestAnimationFrame(commitEvents)
-            }
-            this.animationFrameId = requestAnimationFrame(commitEvents)
-            break
-        }
-        }
-        return this.startPromise
-    }
-
-    stop() {
-        switch (this.impl) {
-        case IMPL.BLOCKING:
-        case IMPL.LOCKING: {
-            cancelAnimationFrame(this.animationFrameId)
-            break
-        }
-        }
-        this.eventsSender({
-            type: REQUEST_MESSAGE_TYPE.STOP,
-            data: 0,
-        })
-        this.worker.removeEventListener("message", this.handleMessage)
-        if (this.rendererWorker) {
-            this.rendererWorker.postMessage({
-                type: REQUEST_MESSAGE_TYPE.STOP
-            })
-        }
-    }
-
-    handleKeyDown(data) {
-        this.eventsSender({
-            type: REQUEST_MESSAGE_TYPE.KEY_DOWN,
-            data
-        })
-    }
-
-    handleKeyUp(data) {
-        this.eventsSender({
-            type: REQUEST_MESSAGE_TYPE.KEY_UP,
-            data
-        })
-    }
-
-    handleWheelMove(data) {
-        this.eventsSender({
-            type: REQUEST_MESSAGE_TYPE.WHEEL_MOVE,
-            data
-        })
-    }
-
-    handleMouseMove(data) {
-        this.eventsSender({
-            type: REQUEST_MESSAGE_TYPE.MOUSE_MOVE,
-            data
-        })
-    }
-
-}
-
-const MESSAGE_TYPE_TO_EVENT_TYPE = {
-    [REQUEST_MESSAGE_TYPE.KEY_DOWN]: EVENT_TYPE.KEY_DOWN,
-    [REQUEST_MESSAGE_TYPE.KEY_UP]: EVENT_TYPE.KEY_UP,
-    [REQUEST_MESSAGE_TYPE.WHEEL_MOVE]: EVENT_TYPE.WHEEL_MOVE,
-    [REQUEST_MESSAGE_TYPE.MOUSE_MOVE]: EVENT_TYPE.MOUSE_MOVE,
-    [REQUEST_MESSAGE_TYPE.STOP]: EVENT_TYPE.STOP,
-}
-
-class EventsQueue {
-  constructor(sharedMemoryBuffer) {
-    this.queue = new SharedQueue(sharedMemoryBuffer)
-  }
-
-  push({ type, data }) {
-    this.queue.pushUint(MESSAGE_TYPE_TO_EVENT_TYPE[type])
-    switch (type) {
-    case REQUEST_MESSAGE_TYPE.MOUSE_MOVE: {
-        this.queue.pushFloat(data.x)
-        this.queue.pushFloat(data.y)
-        return
-    }
-    default:
-        this.queue.pushInt(data)
-        return
-    }
-  }
-
-  commit() {
-    this.queue.commit()
-  }
-
-  pop(handler) {
-      const gen = this.queue.read()
-      for (const item of gen) {
-        const type = item.uint
-        switch(type) {
-        case EVENT_TYPE.MOUSE_MOVE:
-            handler({
-                type,
-                data: {
-                    x: gen.next().value.float,
-                    y: gen.next().value.float,
-                }
-            })
-            break
-        default:
-            handler({ type, data: gen.next().value.int })
-        }
-    }
-  }
 }
 
 class SyncLoader {
@@ -540,6 +44,521 @@ class SyncLoader {
         const imgData = new ImageData(w, h)
         imgData.data.set(g.next().value.bytes)
         return imgData
+    }
+}
+
+class EventsQueue {
+  constructor(sharedMemoryBuffer) {
+    this.queue = new SharedQueue(sharedMemoryBuffer)
+  }
+
+  push(event) {
+    this.queue.pushUint(event.type)
+    switch (type) {
+    case EVENT_TYPE.WHEEL_MOVE: {
+        this.queue.pushInt(event.direction)
+        return
+    }
+    case EVENT_TYPE.KEY_DOWN:
+    case EVENT_TYPE.KEY_UP: {
+        this.queue.pushUint(event.keyCode)
+        return
+    }
+    case EVENT_TYPE.MOUSE_MOVE: {
+        this.queue.pushFloat(event.x)
+        this.queue.pushFloat(event.y)
+        return
+    }
+    case EVENT_TYPE.START: {
+        this.queue.pushString(data.wasmPath)
+        return
+    }
+    case EVENT_TYPE.STOP:
+        return
+    default:
+        throw new Error(`Unknown event type ${event.type}`)
+    }
+  }
+
+  commit() {
+    this.queue.commit()
+  }
+
+  pop(handler) {
+      const gen = this.queue.read()
+      for (const item of gen) {
+        const type = item.uint
+        switch (type) {
+        case EVENT_TYPE.WHEEL_MOVE: {
+            handler({
+              type,
+              direction: gen.next().value.int,
+            })
+            break
+        }
+        case EVENT_TYPE.KEY_DOWN:
+        case EVENT_TYPE.KEY_UP: {
+            handler({
+              type,
+              keyCode: gen.next().value.uint,
+            })
+            break
+        }
+        case EVENT_TYPE.MOUSE_MOVE: {
+            handler({
+              type,
+              x: gen.next().value.float,
+              y: gen.next().value.float,
+            })
+            break
+        }
+        case EVENT_TYPE.START: {
+            handler({
+              type,
+              wasmPath: gen.next().value.string,
+            })
+            break
+        }
+        case EVENT_TYPE.STOP:
+            handler({ type })
+            break
+        default:
+            throw new Error(`Unknown event type ${event.type}`)
+        }
+    }
+  }
+}
+
+let iota = 0
+const REQ_MESSAGE_TYPE = {
+    INIT: iota++,
+    SEND: iota++,
+}
+
+const RES_MESSAGE_TYPE = {
+    TRANSITION: iota++,
+    UPDATE_WINDOW: iota++,
+    TRACE_LOG: iota++,
+    LOAD_FONT: iota++,
+    LOAD_IMAGE: iota++,
+    RENDER: iota++,
+}
+
+function makeWorkerPlatform({
+    self,
+    syncLoader,
+    render,
+    updateWindow,
+}) {
+    return {
+        updateWindow,
+        traceLog(logLevel, text, args) {
+            self.postMessage({
+                type: RES_MESSAGE_TYPE.TRANSITION,
+                logLevel,
+                text,
+                args,
+            })
+        },
+        loadFont(family, fileName) {
+            const data = syncLoader.loadFontBuffer(fileName)
+            self.fonts.add(new FontFace(family, data))
+        },
+        loadImage(fileName) {
+            const imgData = syncLoader.loadImageData(fileName)
+            const canvas = new OffscreenCanvas(
+                imgData.width,
+                imgData.height
+            )
+            const ctx = canvas.getContext('2d')
+            ctx.putImageData(imgData, 0, 0)
+            return canvas
+        },
+        render,
+    }
+}
+
+function makeRemoteRender({ rendering, handlerPort }) {
+    switch (rendering) {
+    case RENDERING_METHOD.DD:
+        return (ctx) => {
+            const data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height)
+            handlerPort.postMessage({
+                type: RES_MESSAGE_TYPE.RENDER,
+                data,
+            }, [data.data.buffer])
+        }
+    case RENDERING_METHOD.BITMAP:
+        return (ctx) => {
+            const data = ctx.canvas.transferToImageBitmap()
+            handlerPort.postMessage({
+                type: RES_MESSAGE_TYPE.RENDER,
+                data,
+            // TODO: Find out why transferring a ImageBitmap leads to memory leaks
+            }) //, [data])
+            data.close()
+        }
+    default:
+        throw new Error(`Unknown rendering context ${rendering}`)
+    }
+}
+
+function makeUpdateWindow({ renderer, self, rendererPort }) {
+    switch (renderer) {
+    case RENDERER.MAIN_THREAD:
+        // Should update title only
+        return (title, width, height) => self.postMessage({
+            type: RES_MESSAGE_TYPE.UPDATE_WINDOW,
+            title,
+            width,
+            height,
+        })
+    case RENDERER.WORKER_THREAD:
+    return (title, width, height) => {
+        // Should update title only
+        self.postMessage({
+            type: RES_MESSAGE_TYPE.UPDATE_WINDOW,
+            title,
+            width,
+            height,
+        })
+        // Should update canvas size
+        rendererPort.postMessage({
+            type: RES_MESSAGE_TYPE.UPDATE_WINDOW,
+            title,
+            width,
+            height,
+        })
+    }
+    default:
+        throw new Error(`Unknown renderer ${renderer}`)
+    }
+}
+
+function makeRaylib(
+    self,
+    {
+        impl,
+        canvas,
+        rendering,
+        renderer,
+        rendererPort,
+        eventsBuffer,
+        statusBuffer,
+        syncLoaderBuffer,
+    },
+) {
+    const handlerPort = {
+        [RENDERER.MAIN_THREAD]: self,
+        [RENDERER.WORKER_THREAD]: rendererPort,
+    }[renderer]
+    return createRaylib({
+        impl,
+        canvas,
+        rendering,
+        platform: makeWorkerPlatform({
+            self,
+            updateWindow: makeUpdateWindow({
+                renderer,
+                self,
+                rendererPort,
+            }),
+            render: makeRemoteRender({
+                rendering,
+                handlerPort,
+            }),
+            syncLoader: new SyncLoader(syncLoaderBuffer),
+        }),
+        eventsQueue: new EventsQueue(eventsBuffer),
+        statusBuffer,
+    })
+}
+
+function makeTransitionHandler(self, { impl, renderer, rendererPort }) {
+    switch (renderer) {
+    case RENDERER.MAIN_THREAD:
+        return (state) => self.postMessage({
+            type: RES_MESSAGE_TYPE.TRANSITION,
+            state
+        })
+    case RENDERER.WORKER_THREAD:
+        return (state) => {
+            self.postMessage({
+                type: RES_MESSAGE_TYPE.TRANSITION,
+                state
+            })
+            if (state === STATE.STOPPED && impl !== IMPL.GAME_FRAME) {
+                rendererPort.postMessage({
+                    type: REQ_MESSAGE_TYPE.SEND,
+                    event: {
+                        type: EVENT_TYPE.STOP,
+                    }
+                })
+            }
+        }
+    default:
+        throw new Error(`Unknown renderer ${renderer}`)
+    }
+}
+
+export function makeWorkerMessageHandler(self) {
+    let raylib = undefined
+    let unsub = undefined
+    const h = new Array(Object.keys(REQ_MESSAGE_TYPE).length)
+    h[REQ_MESSAGE_TYPE.INIT] = (params) => {
+        if (raylib !== undefined) {
+            if (raylib.state !== STATE.STOPPED) {
+                throw new Error("The game is already running. Please stop() it first.")
+            }
+            unsub()
+        }
+        raylib = makeRaylib(self, params)
+        unsub = raylib.subscribe(makeTransitionHandler(self, params))
+    }
+    h[REQ_MESSAGE_TYPE.SEND] = ({ event }) => {
+        raylib.send(event)
+    }
+    return (msg) => {
+        if (handlers[msg.data.type]) {
+            handlers[msg.data.type](msg.data)
+        } else {
+            console.error("Unhandled message", msg)
+        }
+    }
+}
+
+const RENDERING_TO_CONTEXT = {
+    [RENDERING_METHOD.DD]: "2d",
+    [RENDERING_METHOD.BITMAP]: "bitmaprenderer",
+}
+
+function makeRender({ impl, canvas, rendering }) {
+    switch (impl) {
+    case IMPL.GAME_FRAME:
+        return () => {}
+    case IMPL.BLOCKING:
+    case IMPL.LOCKING: {
+        const ctx = canvas.getContext(RENDERING_TO_CONTEXT[rendering])
+        switch (rendering) {
+        case RENDERING_METHOD.DD:
+            return ({ data }) => {
+                ctx.putImageData(data, 0, 0)
+            }
+        case RENDERING_METHOD.BITMAP:
+            return ({ data }) => {
+                ctx.transferFromImageBitmap(data)
+            }
+        default:
+            throw new Error(`Unknown rendering method ${rendering}`)
+        }
+    }
+    default:
+        throw new Error(`Unknown implementation ${impl}`)
+    }
+}
+
+export function makeRendererMessageHandler() {
+    let port = undefined
+    return (msg) => {
+        switch (msg.data.type) {
+        case REQ_MESSAGE_TYPE.INIT: {
+            const render = makeRender(msg.data)
+            port = msg.data.sourcePort
+            port.onmessage = (msg) => {
+                switch (msg.data.type) {
+                case RES_MESSAGE_TYPE.RENDER:
+                    render(msg.data)
+                    break
+                case RES_MESSAGE_TYPE.UPDATE_WINDOW:
+                    canvas.width = msg.data.width
+                    canvas.height = msg.data.height
+                    break
+                default:
+                    throw new Error(`Unhandled message ${msg}`)
+                }
+            }
+            return
+        }
+        case REQ_MESSAGE_TYPE.SEND:
+            if (msg.data.event.type !== EVENT_TYPE.STOP) {
+                return
+            }
+            port.onmessage = null
+            port = undefined
+            return
+        }
+    }
+}
+
+function makeOffscreenCanvas({ impl, canvas }) {
+    switch (impl) {
+    case IMPL.GAME_FRAME:
+        return canvas.transferControlToOffscreen()
+    case IMPL.BLOCKING:
+    case IMPL.LOCKING:
+        return new OffscreenCanvas(0, 0)
+    default:
+        throw new Error(`Unknown implementation ${impl}`)
+    }
+}
+
+function makeEventsSender({ impl, worker, eventsQueue }) {
+    switch (impl) {
+    case IMPL.GAME_FRAME:
+        return (event) => worker.postMessage({
+            type: REQ_MESSAGE_TYPE.SEND,
+            event,
+        })
+    case IMPL.BLOCKING:
+    case IMPL.LOCKING:
+        return (event) => eventsQueue.push(event)
+    default:
+        throw new Error(`Unknown implementation ${impl}`)
+    }
+}
+
+function makeEventsCommiter({ impl, eventsQueue, statusBuffer }) {
+    const status = new Int32Array(statusBuffer)
+    let frameId = undefined
+    let commitEvents = undefined
+    switch (impl) {
+    case IMPL.GAME_FRAME:
+        return null
+    case IMPL.BLOCKING:
+        commitEvents = () => {
+            eventsQueue.commit()
+            frameId = requestAnimationFrame(commitEvents)
+        }
+        break
+    case IMPL.LOCKING:
+        commitEvents = () => {
+            eventsQueue.commit()
+            Atomics.notify(status, 0)
+            frameId = requestAnimationFrame(commitEvents)
+        }
+        break
+    default:
+        throw new Error(`Unknown implementation ${impl}`)
+    }
+    return (state) => {
+        switch (state) {
+        case STATE.STARTED:
+            frameId = requestAnimationFrame(commitEvents)
+            return
+        case STATE.STOPPED:
+            cancelAnimationFrame(frameId)
+            return
+        }
+    }
+}
+
+export class RaylibJsWorker {
+
+    handleMessage = (event) => {
+        if (this.h[event.data.type]) {
+            this.h[event.data.type](event.data)
+        } else {
+            throw new Error(`Unhandled message ${event}`)
+        }
+    }
+
+    constructor({
+        impl,
+        canvas,
+        platform,
+        rendering,
+        renderer,
+        worker,
+        rendererWorker
+    }) {
+        this.worker = worker
+        this.worker.addEventListener("message", this.handleMessage)
+        this.rendererWorker = rendererWorker
+
+        this.impl = impl
+        this.subscribers = new Set()
+
+        const Buffer = window.SharedArrayBuffer ? SharedArrayBuffer : ArrayBuffer
+        const eventsBuffer = new Buffer(10 * 1024)
+        const eventsQueue = new EventsQueue(eventsBuffer)
+        this.send = makeEventsSender({
+            impl,
+            worker,
+            eventsQueue,
+        })
+
+        const statusBuffer = new Buffer(4)
+        this.status = new Int32Array(statusBuffer)
+
+        const eventsCommiter = makeEventsCommiter({ impl, eventsQueue, statusBuffer })
+        if (eventsCommiter) {
+            this.subscribers.add(eventsCommiter)
+        }
+
+        const syncLoaderBuffer = new Buffer(640 * 1024)
+        this.syncLoader = new SyncLoader(syncLoaderBuffer)
+
+        this.h = new Array(Object.keys(RES_MESSAGE_TYPE).length)
+        this.h[RES_MESSAGE_TYPE.TRANSITION] = ({ state }) => {
+            for (const handler of this.subscribers) {
+                handler(state)
+            }
+        }
+        this.h[RES_MESSAGE_TYPE.UPDATE_WINDOW] = ({ title }) => {
+            document.title = title
+        }
+        this.h[RES_MESSAGE_TYPE.TRACE_LOG] = ({ logLevel, text, args }) => {
+            platform.traceLog(logLevel, text, args)
+        }
+        this.h[RES_MESSAGE_TYPE.LOAD_FONT] = ({ fileName }) => {
+            fetch(fileName).then(r => r.arrayBuffer()).then(
+                (buffer) => this.syncLoader.pushFontBuffer(buffer),
+                console.error,
+            )
+        }
+        const tmpCanvas = document.createElement('canvas')
+        const tmpCtx = tmpCanvas.getContext('2d')
+        this.h[RES_MESSAGE_TYPE.LOAD_IMAGE] = ({ fileName }) => {
+            const img = new Image()
+            img.onload = () => {
+                tmpCanvas.width = img.width
+                tmpCanvas.height = img.height
+                tmpCtx.drawImage(img, 0, 0)
+                const imgData = tmpCtx.getImageData(0, 0, img.width, img.height)
+                this.syncLoader.pushImageData(imgData)
+            }
+            // TODO: img.onerror
+            img.src = fileName
+        }
+        this.h[RES_MESSAGE_TYPE.RENDER] = makeRender({ impl, canvas, rendering })
+
+        const channel = new MessageChannel()
+        if (impl !== IMPL.GAME_FRAME && renderer === RENDERER.WORKER_THREAD) {
+            const offscreen = canvas.transferControlToOffscreen()
+            this.rendererWorker.postMessage({
+                type: REQ_MESSAGE_TYPE.INIT,
+                impl,
+                rendering,
+                canvas: offscreen,
+            }, [offscreen, channel.port1])
+        }
+        const offscreen = makeOffscreenCanvas({ impl, canvas })
+        this.worker.postMessage({
+            type: REQ_MESSAGE_TYPE.INIT,
+            impl,
+            canvas: offscreen,
+            rendering,
+            renderer,
+            rendererPort: channel.port2,
+            eventsBuffer,
+            statusBuffer,
+            syncLoaderBuffer,
+        }, [offscreen, channel.port2])
+    }
+
+    destroy() {
+        this.worker.removeEventListener("message", this.handleMessage)
+        this.subscribers.clear()
     }
 
 }

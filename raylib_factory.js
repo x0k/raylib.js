@@ -1,14 +1,14 @@
-import { RaylibJsBase, RaylibJs, EVENT_TYPE, STATE } from './raylib.js'
+import { RaylibJsBase, RaylibJs, EVENT_TYPE as _EVENT_TYPE, STATE as _STATE } from './raylib.js'
 
-let iota = Object.keys(STATE).length
-const STATE2 = {
-    ...STATE,
+let iota = Object.keys(_STATE).length
+export const STATE = {
+    ..._STATE,
     STOPPING: iota++
 }
 
-iota = Object.keys(EVENT_TYPE).length
-const EVENT_TYPE2 = {
-    ...EVENT_TYPE,
+iota = Object.keys(_EVENT_TYPE).length
+export const EVENT_TYPE = {
+    ..._EVENT_TYPE,
     STOPPED: iota++
 }
 
@@ -17,23 +17,16 @@ export class BlockingRaylibJs extends RaylibJsBase {
     onStarted(params) {
         this.previous = performance.now()
         super.onStarted(params)
-        this.dispatch({ type: EVENT_TYPE2.STOPPED })
+        this.send({ type: EVENT_TYPE.STOPPED })
     }
 
     onStop() {
-        switch (this.state) {
-        case STATE.STARTED:
-            this.state = STATE.STOPPING
-            this.windowShouldClose = true
-            break
-        default:
-            super.onStop()
-        }
+        this.windowShouldClose = true
     }
 
     onStopped() {
-        this.windowShouldClose = false
         super.onStop()
+        this.windowShouldClose = false
     }
 
     constructor({ ctx, platform, eventsQueue }) {
@@ -41,13 +34,24 @@ export class BlockingRaylibJs extends RaylibJsBase {
         this.eventsQueue = eventsQueue
         this.windowShouldClose = false
         this.frameTime = undefined
-        this.handlers = {
-            ...this.handlers,
-            [STATE2.STOPPING]: {
-                [EVENT_TYPE2.STOPPED]: this.onStopped.bind(this),
+        this.config = {
+            ...this.config,
+            [STATE.STARTED]: {
+                ...this.config[STATE.STARTED],
+                [EVENT_TYPE.STOP]: {
+                    target: STATE.STOPPING,
+                    action: this.onStop.bind(this),
+                },
+            },
+            [STATE.STOPPING]: {
+                [EVENT_TYPE.STOPPED]: {
+                    target: STATE.STOPPED,
+                    action: this.onStopped.bind(this),
+                }
             }
         }
-        this.dispatch = this.dispatch.bind(this)
+        this.send = this.send.bind(this)
+        this.eventsQueue.waitAndPop(this.send)
     }
 
     SetTargetFPS(fps) {
@@ -65,7 +69,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
     }
 
     BeginDrawing() {
-        this.eventsQueue.pop(this.dispatch)
+        this.eventsQueue.pop(this.send)
         let now
         do {
             now = performance.now()
@@ -78,7 +82,6 @@ export class BlockingRaylibJs extends RaylibJsBase {
         super.EndDrawing()
         this.platform.render(this.ctx);
     }
-
 }
 
 export class LockingRaylibJs extends BlockingRaylibJs {
@@ -89,12 +92,11 @@ export class LockingRaylibJs extends BlockingRaylibJs {
 
     BeginDrawing() {
         Atomics.wait(this.status, 0, 0);
-        this.eventsQueue.pop(this.dispatch)
+        this.eventsQueue.pop(this.send)
         const now = performance.now();
         this.dt = (now - this.previous)/1000.0;
         this.previous = now;
     }
-
 }
 
 export const IMPL = {
@@ -103,16 +105,16 @@ export const IMPL = {
     LOCKING: "locking",
 }
 
-export const RENDERING_CTX = {
+export const RENDERING_METHOD = {
     DD: "2d",
     BITMAP: "bitmap",
 }
 
-const remoteContextFactories = {
-    [RENDERING_CTX.DD]: (canvas) => canvas.getContext('2d', {
+const remoteContextFactory = {
+    [RENDERING_METHOD.DD]: (canvas) => canvas.getContext('2d', {
         willReadFrequently: true
     }),
-    [RENDERING_CTX.BITMAP]: (canvas) => canvas.getContext('2d')
+    [RENDERING_METHOD.BITMAP]: (canvas) => canvas.getContext('2d')
 }
 
 export function createRaylib({
@@ -129,8 +131,7 @@ export function createRaylib({
         return new RaylibJs(ctx, platform)
     }
     case IMPL.BLOCKING: {
-        const canvas = new OffscreenCanvas(0, 0)
-        const ctx = remoteContextFactories[rendering](canvas)
+        const ctx = remoteContextFactory[rendering](canvas)
         return new BlockingRaylibJs({
             ctx,
             platform,
@@ -138,8 +139,7 @@ export function createRaylib({
         })
     }
     case IMPL.LOCKING: {
-        const canvas = new OffscreenCanvas(0, 0)
-        const ctx = remoteContextFactories[rendering](canvas)
+        const ctx = remoteContextFactory[rendering](canvas)
         return new LockingRaylibJs({
             ctx,
             platform,
