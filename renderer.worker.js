@@ -9,4 +9,4 @@ self.fonts.add(font);
 
 font.load().catch(console.error)
 
-onmessage = makeRendererMessagesHandler(self)
+onmessage = makeRendererMessagesHandler()

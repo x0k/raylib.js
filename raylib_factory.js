@@ -14,7 +14,13 @@ export const EVENT_TYPE = {
 
 export class BlockingRaylibJs extends RaylibJsBase {
 
+    pullEvents = () => {
+        this.eventsQueue.pop(this.send)
+        requestAnimationFrame(this.pullEvents)
+    }
+
     onStarted(params) {
+        cancelAnimationFrame(this.eventsPullId)
         this.previous = performance.now()
         super.onStarted(params)
         this.send({ type: EVENT_TYPE.STOPPED })
@@ -27,6 +33,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
     onStopped() {
         super.onStop()
         this.windowShouldClose = false
+        this.eventsPullId = requestAnimationFrame(this.pullEvents)
     }
 
     constructor({ ctx, platform, eventsQueue }) {
@@ -51,7 +58,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
             }
         }
         this.send = this.send.bind(this)
-        this.eventsQueue.waitAndPop(this.send)
+        this.eventsPullId = requestAnimationFrame(this.pullEvents)
     }
 
     SetTargetFPS(fps) {
@@ -63,10 +70,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
         return this.windowShouldClose
     }
 
-    CloseWindow() {
-        super.stop()
-        this.windowShouldClose = false
-    }
+    CloseWindow() {}
 
     BeginDrawing() {
         this.eventsQueue.pop(this.send)

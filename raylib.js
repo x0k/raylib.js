@@ -145,11 +145,14 @@ export class RaylibJsBase {
         if (transition === undefined) {
             return
         }
+        const stateChange = transition.target !== undefined
+        if (stateChange) {
+            this.state = transition.target
+        }
         transition?.action(event)
-        if (transition.target === undefined) {
+        if (!stateChange) {
             return
         }
-        this.state = transition.target
         for (const handler of this.subscribers) {
             handler(this.state)
         }
