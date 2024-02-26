@@ -1,3 +1,5 @@
+import { Service, STATE as _STATE, EVENT_TYPE as _EVENT_TYPE } from './service.js'
+
 function make_environment(env) {
     return new Proxy(env, {
         get(target, prop, receiver) {
@@ -11,26 +13,25 @@ function make_environment(env) {
     });
 }
 
-let iota = 0
+let iota = Object.keys(_STATE).length
 export const STATE = {
-    STOPPED: iota++,
+    ..._STATE,
     STARTING: iota++,
-    STARTED: iota++,
+    FAILED: iota++,
 }
 
-iota = 0
+iota = Object.keys(_EVENT_TYPE).length
 export const EVENT_TYPE = {
-    START: iota++,
+    ..._EVENT_TYPE,
     STARTED: iota++,
     FAILED: iota++,
-    STOP: iota++,
     KEY_DOWN: iota++,
     KEY_UP: iota++,
     WHEEL_MOVE: iota++,
     MOUSE_MOVE: iota++,
 }
 
-export class RaylibJsBase {
+export class RaylibJsBase extends Service {
     // TODO: We stole the font from the website
     // (https://raylib.com/) and it's slightly different than
     // the one that is "baked" into Raylib library itself. To
@@ -53,25 +54,13 @@ export class RaylibJsBase {
         this.images = [];
     }
 
-    onKeyDown({ keyCode }) {
-        this.currentPressedKeyState.add(keyCode);
+    onStopped() {
+        this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.#reset()
     }
 
-    onKeyUp({ keyCode }) {
-        this.currentPressedKeyState.delete(keyCode);
-    }
-
-    onWheelMove({ direction }) {
-        this.currentMouseWheelMoveState = direction
-    }
-
-    onMouseMove({ x, y }) {
-        this.currentMousePosition.x = x
-        this.currentMousePosition.y = y
-    }
-
-    onStart({ wasmPath }) {
-        WebAssembly.instantiateStreaming(fetch(wasmPath), {
+    onStarting() {
+        WebAssembly.instantiateStreaming(fetch(this.wasmPath), {
             env: make_environment(this)
         }).then(
             (wasm) => this.send({ type: EVENT_TYPE.STARTED, wasm }),
@@ -79,89 +68,89 @@ export class RaylibJsBase {
         )
     }
 
-    onStarted({ wasm }) {
-        this.wasm = wasm
+    onFailed() {
+        this.platform.traceLog(LOG_ERROR, "Failed to start", this.error)
+    }
+
+    onStarted() {
         this.wasm.instance.exports.main();
     }
 
-    onFailed({ error }) {
-       this.platform.traceLog(LOG_ERROR, "Failed to start", error)
-       this.onStop()
-    }
-    
-    onStop() {
-        this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
-        this.#reset()
-    }
-
     constructor(ctx, platform) {
+        super(STATE.STOPPED)
         this.ctx = ctx
         this.platform = platform
-        this.subscribers = new Set()
         this.#reset();
-        this.state = STATE.STOPPED
-        const onStop = {
-            target: STATE.STOPPED,
-            action: this.onStop.bind(this),
-        }
         this.config = {
             [STATE.STOPPED]: {
-                [EVENT_TYPE.START]: {
-                    target: STATE.STARTING,
-                    action: this.onStart.bind(this),
+                enter: this.onStopped.bind(this),
+                on: {
+                    [EVENT_TYPE.START]: {
+                        target: STATE.STARTING,
+                        assign: ({ wasmPath }) => {
+                            this.wasmPath = wasmPath
+                        },
+                    },
                 },
             },
             [STATE.STARTING]: {
-                [EVENT_TYPE.STARTED]: {
-                    target: STATE.STARTED,
-                    action: this.onStarted.bind(this),
+                enter: this.onStarting.bind(this),
+                on: {
+                    [EVENT_TYPE.STOP]: {
+                        target: STATE.STOPPED,
+                    },
+                    [EVENT_TYPE.STARTED]: {
+                        target: STATE.STARTED,
+                        assign: ({ wasm }) => {
+                            this.wasm = wasm
+                        },
+                    },
+                    [EVENT_TYPE.FAILED]: {
+                        target: STATE.FAILED,
+                        assign: ({ error }) => {
+                            this.error = error
+                        },
+                    },
                 },
-                [EVENT_TYPE.FAILED]: {
-                    target: STATE.STOPPED,
-                    action: this.onFailed.bind(this),
-                },
-                [EVENT_TYPE.STOP]: onStop,
             },
             [STATE.STARTED]: {
-                [EVENT_TYPE.STOP]: onStop,
-                [EVENT_TYPE.KEY_UP]: {
-                    action: this.onKeyUp.bind(this),
+                enter: this.onStarted.bind(this),
+                on: {
+                    [EVENT_TYPE.STOP]: {
+                        target: STATE.STOPPED,
+                    },
+                    [EVENT_TYPE.KEY_UP]: {
+                        assign: ({ keyCode }) => {
+                            this.currentPressedKeyState.delete(keyCode);
+                        },
+                    },
+                    [EVENT_TYPE.KEY_DOWN]: {
+                        assign: ({ keyCode }) => {
+                            this.currentPressedKeyState.add(keyCode);
+                        },
+                    },
+                    [EVENT_TYPE.WHEEL_MOVE]: {
+                        assign: ({ direction }) => {
+                            this.currentMouseWheelMoveState = direction
+                        },
+                    },
+                    [EVENT_TYPE.MOUSE_MOVE]: {
+                        assign: ({ x, y }) => {
+                            this.currentMousePosition.x = x
+                            this.currentMousePosition.y = y
+                        },
+                    },
                 },
-                [EVENT_TYPE.KEY_DOWN]: {
-                    action: this.onKeyDown.bind(this),
+            },
+            [STATE.FAILED]: {
+                enter: this.onFailed.bind(this),
+                always: {
+                    target: STATE.STOPPED,
+                    assign: () => {
+                        this.error = undefined
+                    }
                 },
-                [EVENT_TYPE.WHEEL_MOVE]: {
-                    action: this.onWheelMove.bind(this),
-                },
-                [EVENT_TYPE.MOUSE_MOVE]: {
-                    action: this.onMouseMove.bind(this),
-                },
-            }
-        }
-    }
-
-    send(event) {
-        const transition = this.config[this.state][event.type]
-        if (transition === undefined) {
-            return
-        }
-        const stateChange = transition.target !== undefined
-        if (stateChange) {
-            this.state = transition.target
-        }
-        transition?.action(event)
-        if (!stateChange) {
-            return
-        }
-        for (const handler of this.subscribers) {
-            handler(this.state)
-        }
-    }
-
-    subscribe(onTransition) {
-        this.subscribers.add(onTransition)
-        return () => {
-            this.subscribers.delete(onTransition)
+            },
         }
     }
 
@@ -386,13 +375,13 @@ export class RaylibJsBase {
         this.ctx.font = fontSize+"px myfont";
         this.ctx.fillText(text, posX, posY + fontSize);
     }
+}
+
+export class RaylibJs extends RaylibJsBase {
 
     raylib_js_set_entry(entry) {
         this.entryFunction = this.wasm.instance.exports.__indirect_function_table.get(entry);
     }
-}
-
-export class RaylibJs extends RaylibJsBase {
     
     next = (timestamp) => {
         this.dt = (timestamp - this.previous)/1000.0;
@@ -401,17 +390,17 @@ export class RaylibJs extends RaylibJsBase {
         this.frameId = requestAnimationFrame(this.next);
     }
 
-    onStarted(params) {
-        super.onStarted(params);
+    onStarted(event) {
+        super.onStarted(event)
         this.frameId = requestAnimationFrame((timestamp) => {
             this.previous = timestamp
-            this.frameId= requestAnimationFrame(this.next)
+            this.frameId = requestAnimationFrame(this.next)
         });
     }
 
-    onStop() {
+    onStopped(event) {
         cancelAnimationFrame(this.frameId);
-        super.onStop();
+        super.onStopped(event);
     }
     
     constructor(ctx, platform) {

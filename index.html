@@ -91,7 +91,7 @@
     </select>
     <canvas id="game"></canvas>
     <script type="module">
-        import { EVENT_TYPE, STATE, RaylibJs, makePlatform, glfwKeyMapping } from "./raylib.js"
+        import { EVENT_TYPE, RaylibJs, makePlatform, glfwKeyMapping } from "./raylib.js"
         import { IMPL, RENDERING_METHOD } from "./raylib_factory.js"
         import { RaylibJsWorker, RENDERER } from "./raylib_worker.js"
 
@@ -162,24 +162,13 @@
                 "worker": pathFactory
             }
             let oldCanvas = canvas
-            const stop = () => {
+            const stop = async () => {
                 if (raylibJs === undefined) {
-                    return Promise.resolve()
+                    return
                 }
-                const promise = new Promise((res) => {
-                    const unsub = raylibJs.subscribe((state) => {
-                        if (state === STATE.STOPPED) {
-                            removeEventListeners()
-                            unsub()
-                            if (raylibJs instanceof RaylibJsWorker) {
-                                raylibJs.destroy()
-                            }
-                            res()
-                        }
-                    })
-                })
-                raylibJs.send({ type: EVENT_TYPE.STOP })
-                return promise
+                await raylibJs.stop()
+                removeEventListeners()
+                raylibJs.destroy()
             }
             return async () => {
                 await stop()
@@ -201,8 +190,7 @@
                     rendererWorker,
                 })
                 removeEventListeners = addEventListeners(raylibJs, newCanvas)
-                raylibJs.send({
-                    type: EVENT_TYPE.START,
+                return raylibJs.start({
                     wasmPath: envPathFactories[env](impl, exampleSelector.value),
                 })
             }

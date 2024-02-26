@@ -1,4 +1,5 @@
 import { SharedQueue } from './shared_queue.js'
+import { Service } from './service.js'
 import {
     STATE,
     EVENT_TYPE,
@@ -165,7 +166,7 @@ function makeWorkerPlatform({
         updateWindow,
         traceLog(logLevel, text, args) {
             self.postMessage({
-                type: RES_MESSAGE_TYPE.TRANSITION,
+                type: RES_MESSAGE_TYPE.TRACE_LOG,
                 logLevel,
                 text,
                 args,
@@ -314,8 +315,12 @@ export function makeWorkerMessagesHandler(self) {
         raylib.send(event)
     }
     h[REQ_MESSAGE_TYPE.DESTROY] = () => {
-        unsub?.()
+        if (raylib === undefined) {
+            return
+        }
+        unsub()
         unsub = undefined
+        raylib.destroy()
         raylib = undefined
     }
     return (msg) => {
@@ -385,7 +390,7 @@ export function makeRendererMessagesHandler() {
             return
         }
         case REQ_MESSAGE_TYPE.DESTROY:
-            if (!port) {
+            if (port === undefined) {
                 return
             }
             port.onmessage = null
@@ -473,7 +478,7 @@ function makeUpdateWindow({ impl, renderer, platform }) {
     }
 }
 
-export class RaylibJsWorker {
+export class RaylibJsWorker extends Service {
 
     handleMessage = (event) => {
         if (this.h[event.data.type]) {
@@ -492,12 +497,12 @@ export class RaylibJsWorker {
         worker,
         rendererWorker
     }) {
+        super(STATE.STOPPED)
         this.worker = worker
         this.worker.addEventListener("message", this.handleMessage)
         this.rendererWorker = rendererWorker
 
         this.impl = impl
-        this.subscribers = new Set()
         
         const Buffer = window.SharedArrayBuffer ? SharedArrayBuffer : ArrayBuffer
         const eventsBuffer = new Buffer(10 * 1024)
@@ -522,6 +527,7 @@ export class RaylibJsWorker {
 
         this.h = new Array(Object.keys(RES_MESSAGE_TYPE).length)
         this.h[RES_MESSAGE_TYPE.TRANSITION] = ({ state }) => {
+            this.state = state
             for (const handler of this.subscribers) {
                 handler(state)
             }
@@ -585,15 +591,8 @@ export class RaylibJsWorker {
         }, [offscreen, channel.port2])
     }
 
-    subscribe(onTransition) {
-        this.subscribers.add(onTransition)
-        return () => {
-            this.subscribers.delete(onTransition)
-        }
-    }
-
     destroy() {
-        this.subscribers.clear()
+        super.destroy()
         this.stopEventsCommiter()
         if (this.rendererWorker) {
             this.rendererWorker.postMessage({

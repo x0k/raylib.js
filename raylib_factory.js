@@ -3,6 +3,7 @@ import { RaylibJsBase, RaylibJs, EVENT_TYPE as _EVENT_TYPE, STATE as _STATE } fr
 let iota = Object.keys(_STATE).length
 export const STATE = {
     ..._STATE,
+    RUNNING: iota++,
     STOPPING: iota++
 }
 
@@ -19,20 +20,14 @@ export class BlockingRaylibJs extends RaylibJsBase {
         requestAnimationFrame(this.pullEvents)
     }
 
-    onStarted(params) {
-        cancelAnimationFrame(this.eventsPullId)
+    onRunning(event) {
         this.previous = performance.now()
-        super.onStarted(params)
+        cancelAnimationFrame(this.eventsPullId)
+        this.onStarted(event)
         this.send({ type: EVENT_TYPE.STOPPED })
     }
 
-    onStop() {
-        this.windowShouldClose = true
-    }
-
-    onStopped() {
-        super.onStop()
-        this.windowShouldClose = false
+    onStopping() {
         this.eventsPullId = requestAnimationFrame(this.pullEvents)
     }
 
@@ -43,20 +38,38 @@ export class BlockingRaylibJs extends RaylibJsBase {
         this.frameTime = undefined
         this.config = {
             ...this.config,
+            // Required for successful notification of the transition
+            // to the STARTED state
             [STATE.STARTED]: {
-                ...this.config[STATE.STARTED],
-                [EVENT_TYPE.STOP]: {
-                    target: STATE.STOPPING,
-                    action: this.onStop.bind(this),
+                always: {
+                    target: STATE.RUNNING,
+                }
+            },
+            [STATE.RUNNING]: {
+                enter: this.onRunning.bind(this),
+                on: {
+                    ...this.config[STATE.STARTED].on,
+                    [EVENT_TYPE.STOP]: {
+                        target: STATE.STOPPING,
+                        assign: () => {
+                            this.windowShouldClose = true
+                        },
+                    },
                 },
             },
             [STATE.STOPPING]: {
-                [EVENT_TYPE.STOPPED]: {
-                    target: STATE.STOPPED,
-                    action: this.onStopped.bind(this),
-                }
+                enter: this.onStopping.bind(this),
+                on: {
+                    [EVENT_TYPE.STOPPED]: {
+                        target: STATE.STOPPED,
+                        assign: () => {
+                            this.windowShouldClose = false
+                        },
+                    },
+                },
             }
         }
+        this.processEvent = this.processEvent.bind(this)
         this.send = this.send.bind(this)
         this.eventsPullId = requestAnimationFrame(this.pullEvents)
     }
@@ -73,7 +86,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
     CloseWindow() {}
 
     BeginDrawing() {
-        this.eventsQueue.pop(this.send)
+        this.eventsQueue.pop(this.processEvent)
         let now
         do {
             now = performance.now()
@@ -96,7 +109,7 @@ export class LockingRaylibJs extends BlockingRaylibJs {
 
     BeginDrawing() {
         Atomics.wait(this.status, 0, 0);
-        this.eventsQueue.pop(this.send)
+        this.eventsQueue.pop(this.processEvent)
         const now = performance.now();
         this.dt = (now - this.previous)/1000.0;
         this.previous = now;
