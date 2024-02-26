@@ -1,4 +1,10 @@
-import { RaylibJsBase, RaylibJs, EVENT_TYPE as _EVENT_TYPE, STATE as _STATE } from './raylib.js'
+import {
+    RaylibJsBase,
+    RaylibJs,
+    EVENT_TYPE as _EVENT_TYPE,
+    STATE as _STATE,
+    glfwKeyMapping,
+} from './raylib.js'
 
 let iota = Object.keys(_STATE).length
 export const STATE = {
@@ -36,6 +42,8 @@ export class BlockingRaylibJs extends RaylibJsBase {
         this.eventsQueue = eventsQueue
         this.windowShouldClose = false
         this.frameTime = undefined
+        this.unpressedKeys = new Uint16Array(Object.keys(glfwKeyMapping).length)
+        this.unpressedKeyIndex = 0
         this.config = {
             ...this.config,
             // Required for successful notification of the transition
@@ -49,6 +57,11 @@ export class BlockingRaylibJs extends RaylibJsBase {
                 enter: this.onRunning.bind(this),
                 on: {
                     ...this.config[STATE.STARTED].on,
+                    [EVENT_TYPE.KEY_UP]: {
+                        assign: ({ keyCode }) => {
+                            this.unpressedKeys[this.unpressedKeyIndex++] = keyCode
+                        },
+                    },
                     [EVENT_TYPE.STOP]: {
                         target: STATE.STOPPING,
                         assign: () => {
@@ -80,20 +93,20 @@ export class BlockingRaylibJs extends RaylibJsBase {
     }
 
     WindowShouldClose() {
-        return this.windowShouldClose
-    }
-
-    CloseWindow() {}
-
-    BeginDrawing() {
-        this.eventsQueue.pop(this.processEvent)
+        while(this.unpressedKeyIndex > 0) {
+            this.currentPressedKeyState.delete(this.unpressedKeys[--this.unpressedKeyIndex])
+        }
         let now
+        this.eventsQueue.pop(this.processEvent)
         do {
             now = performance.now()
             this.dt = (now - this.previous)/1000.0
         } while (this.dt < this.frameTime)
         this.previous = now
+        return this.windowShouldClose
     }
+
+    CloseWindow() {}
 
     EndDrawing() {
         super.EndDrawing()
@@ -107,12 +120,16 @@ export class LockingRaylibJs extends BlockingRaylibJs {
         this.status = new Int32Array(statusBuffer);
     }
 
-    BeginDrawing() {
+    WindowShouldClose() {
+        while(this.unpressedKeyIndex > 0) {
+            this.currentPressedKeyState.delete(this.unpressedKeys[--this.unpressedKeyIndex])
+        }
         Atomics.wait(this.status, 0, 0);
         this.eventsQueue.pop(this.processEvent)
         const now = performance.now();
         this.dt = (now - this.previous)/1000.0;
         this.previous = now;
+        return this.windowShouldClose
     }
 }
 
