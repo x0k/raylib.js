@@ -125,6 +125,7 @@ export class LockingRaylibJs extends BlockingRaylibJs {
             this.currentPressedKeyState.delete(this.unpressedKeys[--this.unpressedKeyIndex])
         }
         Atomics.wait(this.status, 0, 0);
+        Atomics.store(this.status, 0, 0);
         this.eventsQueue.pop(this.processEvent)
         const now = performance.now();
         this.dt = (now - this.previous)/1000.0;

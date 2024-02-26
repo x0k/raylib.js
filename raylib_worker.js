@@ -443,6 +443,7 @@ function startEventsCommiter({ impl, eventsQueue, statusBuffer }) {
     case IMPL.LOCKING:
         commitEvents = () => {
             eventsQueue.commit()
+            Atomics.store(status, 0, 1)
             Atomics.notify(status, 0)
             frameId = requestAnimationFrame(commitEvents)
         }
