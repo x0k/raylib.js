@@ -154,6 +154,7 @@
                     return `wasm/${example}.wasm`
                 case IMPL.BLOCKING:
                 case IMPL.LOCKING:
+                case IMPL.UNLOCKED:
                     return `wasm/${example}.native.wasm`
                 }
             }
@@ -251,6 +252,7 @@
             [IMPL.GAME_FRAME]: "game frame",
             [IMPL.BLOCKING]: "blocking",
             [IMPL.LOCKING]: "locking",
+            [IMPL.UNLOCKED]: "unlocked",
         }
         const defaultImpl = IMPL.GAME_FRAME
         const raylibImplSelect = document.getElementById("raylib-impl-select");

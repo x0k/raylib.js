@@ -95,11 +95,7 @@ export class BlockingRaylibJs extends RaylibJsBase {
     }
 
     WindowShouldClose() {
-        while (this.unpressedKeyIndex > 0) {
-            this.currentPressedKeyState.delete(
-                this.unpressedKeys[--this.unpressedKeyIndex]
-            );
-        }
+        this.resetKeyState();
         let now;
         this.eventsQueue.pop(this.processEvent);
         do {
@@ -116,6 +112,14 @@ export class BlockingRaylibJs extends RaylibJsBase {
         super.EndDrawing();
         this.platform.render(this.ctx);
     }
+
+    resetKeyState() {
+        while (this.unpressedKeyIndex > 0) {
+            this.currentPressedKeyState.delete(
+                this.unpressedKeys[--this.unpressedKeyIndex]
+            );
+        }
+    }
 }
 
 export class LockingRaylibJs extends BlockingRaylibJs {
@@ -125,11 +129,7 @@ export class LockingRaylibJs extends BlockingRaylibJs {
     }
 
     WindowShouldClose() {
-        while (this.unpressedKeyIndex > 0) {
-            this.currentPressedKeyState.delete(
-                this.unpressedKeys[--this.unpressedKeyIndex]
-            );
-        }
+        this.resetKeyState();
         Atomics.wait(this.status, 0, 0);
         Atomics.store(this.status, 0, 0);
         this.eventsQueue.pop(this.processEvent);
@@ -140,10 +140,23 @@ export class LockingRaylibJs extends BlockingRaylibJs {
     }
 }
 
+export class UnLockedRaylibJs extends BlockingRaylibJs {
+    WindowShouldClose() {
+        this.resetKeyState();
+        const now = performance.now();
+        // scheduler.yield();
+        this.eventsQueue.pop(this.processEvent);
+        this.dt = (now - this.previous) / 1000.0;
+        this.previous = now;
+        return this.windowShouldClose;
+    }
+}
+
 export const IMPL = {
     GAME_FRAME: 'gameFrame',
     BLOCKING: 'blocking',
     LOCKING: 'locking',
+    UNLOCKED: 'unlocked',
 };
 
 export const RENDERING_METHOD = {
@@ -166,6 +179,7 @@ export const CTX_FACTORIES = {
     [IMPL.GAME_FRAME]: ({ canvas }) => canvas.getContext('2d'),
     [IMPL.BLOCKING]: blockingContextFactory,
     [IMPL.LOCKING]: blockingContextFactory,
+    [IMPL.UNLOCKED]: blockingContextFactory,
 };
 
 export const RAYLIB_FACTORIES = {
@@ -182,5 +196,11 @@ export const RAYLIB_FACTORIES = {
             platform,
             eventsQueue,
             statusBuffer,
+        }),
+    [IMPL.UNLOCKED]: ({ ctx, platform, eventsQueue }) =>
+        new UnLockedRaylibJs({
+            ctx,
+            platform,
+            eventsQueue,
         }),
 };

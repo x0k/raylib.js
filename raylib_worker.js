@@ -361,6 +361,7 @@ const RENDER_FACTORIES = {
     [IMPL.GAME_FRAME]: () => () => {},
     [IMPL.BLOCKING]: blockingFactory,
     [IMPL.LOCKING]: blockingFactory,
+    [IMPL.UNLOCKED]: blockingFactory,
 };
 
 export function makeRendererMessagesHandler() {
@@ -404,6 +405,7 @@ const OFFSCREEN_CANVAS_FACTORIES = {
     [IMPL.GAME_FRAME]: (canvas) => canvas.transferControlToOffscreen(),
     [IMPL.BLOCKING]: blockingOffscreenCanvasFactory,
     [IMPL.LOCKING]: blockingOffscreenCanvasFactory,
+    [IMPL.UNLOCKED]: blockingOffscreenCanvasFactory,
 };
 
 const blockingEventSenderFactory =
@@ -422,6 +424,7 @@ const EVENT_SENDER_FACTORIES = {
             }),
     [IMPL.BLOCKING]: blockingEventSenderFactory,
     [IMPL.LOCKING]: blockingEventSenderFactory,
+    [IMPL.UNLOCKED]: blockingEventSenderFactory,
 };
 
 function startEventsCommitter({ impl, eventsQueue, statusBuffer }) {
@@ -432,6 +435,7 @@ function startEventsCommitter({ impl, eventsQueue, statusBuffer }) {
         case IMPL.GAME_FRAME:
             return () => {};
         case IMPL.BLOCKING:
+        case IMPL.UNLOCKED:
             commitEvents = () => {
                 eventsQueue.commit();
                 frameId = requestAnimationFrame(commitEvents);
@@ -476,6 +480,7 @@ const UPDATE_WINDOW_FACTORIES = {
         },
     [IMPL.BLOCKING]: blockingUpdateWindowFactory,
     [IMPL.LOCKING]: blockingUpdateWindowFactory,
+    [IMPL.UNLOCKED]: blockingUpdateWindowFactory,
 };
 
 const BLOCKING_RENDERER_FACTORIES = {
@@ -509,6 +514,7 @@ const RENDERER_FACTORIES = {
     [IMPL.GAME_FRAME]: () => () => {},
     [IMPL.BLOCKING]: blockingRendererFactory,
     [IMPL.LOCKING]: blockingRendererFactory,
+    [IMPL.UNLOCKED]: blockingRendererFactory,
 };
 
 export class RaylibJsWorker extends Service {
