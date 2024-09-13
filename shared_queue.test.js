@@ -1,4 +1,5 @@
-import { it, expect, beforeEach } from "bun:test";
+import { it, beforeEach } from "node:test";
+import { expect } from "node:assert";
 
 import { SharedQueue } from "./shared_queue.js";
 
