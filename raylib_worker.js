@@ -256,10 +256,6 @@ function makeRaylib(
         syncLoaderBuffer,
     }
 ) {
-    const handlerPort = {
-        [RENDERER.MAIN_THREAD]: self,
-        [RENDERER.WORKER_THREAD]: rendererPort,
-    }[renderer];
     return RAYLIB_FACTORIES[impl]({
         ctx: CTX_FACTORIES[impl]({ canvas, rendering }),
         platform: makeWorkerPlatform({
@@ -270,7 +266,10 @@ function makeRaylib(
             }),
             render: REMOTE_RENDERER_FACTORIES[rendering]({
                 rendering,
-                handlerPort,
+                handlerPort: {
+                    [RENDERER.MAIN_THREAD]: self,
+                    [RENDERER.WORKER_THREAD]: rendererPort,
+                }[renderer],
             }),
             syncLoader: new SyncLoader(syncLoaderBuffer, {
                 loadFontBuffer: (fileName) =>
@@ -425,7 +424,7 @@ const EVENT_SENDER_FACTORIES = {
     [IMPL.LOCKING]: blockingEventSenderFactory,
 };
 
-function startEventsCommiter({ impl, eventsQueue, statusBuffer }) {
+function startEventsCommitter({ impl, eventsQueue, statusBuffer }) {
     const status = new Int32Array(statusBuffer);
     let frameId = undefined;
     let commitEvents = undefined;
@@ -546,7 +545,7 @@ export class RaylibJsWorker extends Service {
 
         const statusBuffer = new Buffer(4);
 
-        this.stopEventsCommiter = startEventsCommiter({
+        this.stopEventsCommitter = startEventsCommitter({
             impl,
             eventsQueue,
             statusBuffer,
@@ -630,7 +629,7 @@ export class RaylibJsWorker extends Service {
 
     destroy() {
         super.destroy();
-        this.stopEventsCommiter();
+        this.stopEventsCommitter();
         if (this.rendererWorker) {
             this.rendererWorker.postMessage({
                 type: REQ_MESSAGE_TYPE.DESTROY,
