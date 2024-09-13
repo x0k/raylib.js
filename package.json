@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "python3 server.py",
+    "build": "clang -o nob nob.c",
+    "test": "node --test"
+  }
+}
